@@ -6,6 +6,65 @@ This is a setup specification. No account, secret, installation, deployment or l
 
 Pin compatible versions at bootstrap: Node.js 24, Next.js, React, TypeScript, Drizzle, Neon driver, Trigger SDK/CLI, schema validator and provider clients. Keep one `package-lock.json`. Choose a Neon connection mode supporting interactive transactions and row locks; verify those behaviors against a real database, not an HTTP batch substitute.
 
+## Autonomous-agent pre-flight
+
+An agent may begin autonomous coding only after the configuration below is populated in the intended development environment and the access checks have passed. Use an ignored `.env` for the local runtime; `.env.example` is a names-only template. Keep separate development and production values. Never paste a secret into a prompt, commit it, expose it through `NEXT_PUBLIC_*`, or copy a provider credential into a different provider's variable.
+
+### Required before the first autonomous coding run
+
+| Setting | Required state and verification |
+|---|---|
+| `APP_BASE_URL` | Canonical local/preview URL reachable by callbacks; verify the health route after boot |
+| `DATABASE_URL` | Pooled Neon runtime connection; verify a harmless query and tenant-scoped transaction |
+| `DATABASE_URL_UNPOOLED` | Direct Neon migration connection; verify migrations can run separately from pooled access |
+| `TRIGGER_PROJECT_REF` | `proj_cehggonaqopuuhibihif`; verify the CLI targets the intended project/environment |
+| `TRIGGER_SECRET_KEY` | Development task/API secret from Trigger.dev; verify the task runtime can authenticate without printing it |
+| `SLACK_SIGNING_SECRET` | Talacha.dev Slack app signing secret; verify raw-body signature rejection and acceptance |
+| `SLACK_BOT_TOKEN` | Talacha.dev installation token with only the documented app scopes; verify identity and permitted channel metadata |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | GitHub App credentials for selected repositories; verify installation/repository reads and granted Issues write/Pull requests read permissions |
+| `OPENROUTER_API_KEY` | OpenRouter credential; verify one bounded structured response using the exact model below |
+| `OPENROUTER_MODEL` | Exactly `openai/gpt-5.6-luna`; reject silent fallback or a direct OpenAI route |
+| `CRON_SECRET` | High-entropy secret for the protected maintenance endpoint; verify missing/wrong bearer is rejected |
+| `SIGNAL_PILOT_CONFIG_PATH` | Path to a validated local mapping file; verify tenant, Talacha workspace/channel, repository, approver and identity IDs before import |
+
+The core gate is all required names present, a real database transaction, a data-free Trigger probe, a full permitted Slack thread read, GitHub repository/permission reads, and one schema-valid OpenRouter response. Missing application code is a work item after this gate, not a reason to fabricate provider success.
+
+### Optional settings, enabled only after their own acceptance checks
+
+| Setting | Use and prerequisite |
+|---|---|
+| `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` | Read-only proposal inspector. Requires an Auth0 application, registered callback/logout URLs, server-side session verification and persisted subject-to-tenant mapping. |
+| `ENABLE_INSPECTOR` | Set `true` only after Auth0 login and unmapped-subject denial pass; otherwise keep `false`. |
+| `CPK_INTELLIGENCE_API_KEY` | CopilotKit managed Intelligence project key, separate from model credentials. Enable only when managed thread retention is accepted and the server passes authorized context. |
+| `EXA_API_KEY` | Exa public-document search key. Requires exact sanitized-query approval by the initiating Slack actor before every request; maximum three references. |
+| `ENABLE_EXA` | Set `true` only after a real approved query returns cited public links; otherwise keep `false`. |
+| `AMBIGUOUS_API_KEY` | Optional API token for an allowlisted demo workspace. The agent identity configured by `npx ambiguous@latest auth login` is stored in `.ambi/config.json`, not this variable. |
+| `ENABLE_AMBIGUOUS` | Set `true` only after the documented API/schema and a read-only allowlisted retrieval pass; otherwise keep `false`. |
+| `SLACK_THREAD_READ_TOKEN` | Separate eligible reader token when the bot token cannot read permitted thread replies; never silently substitute a user token. |
+| `TRIGGER_ACCESS_TOKEN` | Noninteractive CLI/CI deployment credential only; never load into application tasks. |
+
+Mozilla.ai has no environment credential in this design. Its evaluator runs offline against synthetic fixtures and must not receive Slack text, credentials, private URLs or production traces. Likewise, the OpenAI Agents SDK uses the existing OpenRouter adapter; do not add `OPENAI_API_KEY` or a second inference gateway.
+
+### Non-env setup that is still mandatory
+
+Store the validated Talacha.dev Slack workspace/channel and GitHub repository mappings in `config/pilot.local.json` (ignored), including named approvers and Slack-to-GitHub identities. Keep the Ambiguous agent credential in the project-local `.ambi/config.json` (ignored). Configure the Trigger task runtime secret store separately from the local shell. Register Auth0 callback/logout URLs and the CopilotKit project only when those optional features are enabled.
+
+### Pre-flight order
+
+1. Confirm Node.js 24, npm, one lockfile and the ignored environment path.
+2. Validate core variable presence without printing values.
+3. Verify Neon connectivity and rollback, then import only validated pilot IDs.
+4. Verify Trigger CLI/project access and run the data-free probe.
+5. Verify Talacha Slack signature, app identity, permitted channel and complete thread pagination.
+6. Verify GitHub App installation and read permissions; do not create an issue or comment during pre-flight.
+7. Verify one bounded `openai/gpt-5.6-luna` structured response through OpenRouter.
+8. Run focused authorization, tenant-isolation, transaction and recovery checks before enabling autonomous execution.
+9. Enable optional Auth0/CopilotKit, Exa, Ambiguous or Mozilla.ai work only after the core gate and each feature's acceptance evidence exists.
+
+The readiness result belongs in `tasks.md` with `PASS`, `PARTIAL`, `FAIL` or `NOT RUN` for each check. A populated `.env`, successful CLI login, package installation or local mock is not integration evidence by itself.
+
+## Complete variable reference
+
 | Exact input name | Meaning / destination |
 |---|---|
 | `APP_BASE_URL` | Canonical HTTPS URL; Vercel and Trigger |

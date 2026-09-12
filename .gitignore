@@ -22,3 +22,4 @@ __pycache__/
 # Local agent scratch; tasks.md and docs/reviews remain tracked
 .superpowers/
 .agent-work/
+.ambi/
