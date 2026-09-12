@@ -71,6 +71,23 @@ function isProviderSegment(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
 }
 
+function isHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value || value !== value.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isGitHubLogin(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(value);
+}
+
 function validateRepository(owner: string, repo: string): void {
   if (!isProviderSegment(owner) || !isProviderSegment(repo)) {
     throw new GitHubWriteError("invalid_input", "GitHub repository coordinates are invalid");
@@ -91,7 +108,9 @@ function validateIssueInput(input: GitHubCreateIssueInput): void {
   }
   if (
     input.assignees.length > 1 ||
-    input.assignees.some((assignee) => !assignee || !isProviderSegment(assignee))
+    input.assignees.some(
+      (assignee) => typeof assignee !== "string" || !assignee || !isProviderSegment(assignee),
+    )
   ) {
     throw new GitHubWriteError("invalid_input", "At most one valid GitHub assignee is allowed");
   }
@@ -183,7 +202,7 @@ async function postJson(
 }
 
 function parseIdentifier(value: unknown): string | undefined {
-  if (typeof value === "string" && value && value === value.trim()) {
+  if (typeof value === "string" && /^\d+$/.test(value) && value === value.trim()) {
     return value;
   }
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
@@ -195,8 +214,7 @@ function parseIdentifier(value: unknown): string | undefined {
 function parseIssueResult(payload: unknown): GitHubIssueResult {
   if (
     !isRecord(payload) ||
-    typeof payload.html_url !== "string" ||
-    !payload.html_url.trim() ||
+    !isHttpUrl(payload.html_url) ||
     typeof payload.number !== "number" ||
     !Number.isSafeInteger(payload.number) ||
     payload.number <= 0
@@ -215,7 +233,7 @@ function parseIssueResult(payload: unknown): GitHubIssueResult {
 
   const assignees: string[] = [];
   for (const assignee of payload.assignees) {
-    if (!isRecord(assignee) || typeof assignee.login !== "string" || !assignee.login.trim()) {
+    if (!isRecord(assignee) || !isGitHubLogin(assignee.login)) {
       throw new GitHubWriteError("github_unknown", "GitHub returned an invalid assignee identity", {
         outcome: "unknown",
       });
@@ -227,7 +245,7 @@ function parseIssueResult(payload: unknown): GitHubIssueResult {
 }
 
 function parseCommentResult(payload: unknown): GitHubCommentResult {
-  if (!isRecord(payload) || typeof payload.html_url !== "string" || !payload.html_url.trim()) {
+  if (!isRecord(payload) || !isHttpUrl(payload.html_url)) {
     throw new GitHubWriteError("github_unknown", "GitHub returned an invalid comment result", {
       outcome: "unknown",
     });
