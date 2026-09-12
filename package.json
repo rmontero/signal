@@ -7,8 +7,20 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "trigger:dev": "trigger.dev dev --profile default"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/not-run.mjs unit",
+    "test:integration": "node scripts/not-run.mjs integration",
+    "test:eval": "node scripts/not-run.mjs evaluation",
+    "test:e2e": "node scripts/not-run.mjs end-to-end",
+    "db:generate": "node scripts/not-run.mjs db-generate",
+    "db:migrate": "node scripts/not-run.mjs db-migrate",
+    "preflight": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx/esm scripts/preflight.ts",
+    "docs:check": "python3 scripts/check_docs.py",
+    "trigger:dev": "trigger dev --profile default"
   },
   "repository": {
     "type": "git",
@@ -17,12 +29,30 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
-    "@trigger.dev/sdk": "^4.5.16"
+    "@neondatabase/serverless": "^1.1.0",
+    "@octokit/auth-app": "^8.3.1",
+    "@octokit/rest": "^22.0.1",
+    "@slack/web-api": "^8.1.1",
+    "@trigger.dev/sdk": "4.5.16",
+    "drizzle-orm": "^0.45.2",
+    "next": "16.3.5",
+    "openai": "^7.15.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "^4.6.2"
   },
   "devDependencies": {
-    "@trigger.dev/build": "^4.5.16",
-    "typescript": "^7.0.2"
+    "@trigger.dev/build": "4.5.16",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "trigger.dev": "4.5.16",
+    "tsx": "^4.20.3",
+    "typescript": "5.9.3"
   }
 }
