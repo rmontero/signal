@@ -4,7 +4,7 @@ This is the sole execution ledger. Read [north_star.md](north_star.md), [roadmap
 
 ## Current step
 
-**STOPPED FOR TODAY — 2026-09-11, at the completed documentation milestone.** No implementation task is claimed. I-01 remains READY for the next user-directed session; use [HANDOFF.md](docs/HANDOFF.md). Do not resume overnight or dispatch Astra automatically.
+**Documentation milestone stopped — 2026-09-11.** The implementation clock was not started at that stopping point; use [HANDOFF.md](docs/HANDOFF.md). The current user-directed session has resumed Track Rob's I-01 bootstrap. Do not resume overnight or dispatch Astra automatically.
 
 **Scoped user-directed onboarding — 2026-09-12:** C-01 setup is verified; full onboarding is PARTIAL and BLOCKED on B-CPK-02 (unimplemented application/authentication/proposal prerequisites). B-CPK-01 is resolved. I-01 is now IN_PROGRESS for the user-requested Trigger.dev bootstrap; remaining provider preflight is pending.
 
@@ -13,29 +13,29 @@ Implementation clock: **NOT STARTED**. The four-hour coding target begins when I
 
 ## Task board
 
-| ID | Task | Depends on | Owner/model | Status | Evidence / next action |
+| ID | Task | Depends on | Track / owner-model | Status | Evidence / next action |
 |---|---|---|---|---|---|
-| D-01 | Canonical north star, roadmap, agent rules, source preservation, task briefs | — | Coordinator | DONE | Root guides, task plan, configuration examples and checker verified; M0 accepted |
-| D-02 | Architecture, typed contracts, infrastructure, SaaS boundaries | D-01 contracts briefing | Astra / write_architecture | DONE | [Delivery report](docs/reviews/D-02.md); accepted by D-05 after contract alignment |
-| D-03 | Verification matrix, operations, two-minute demo | D-01 contracts briefing | Luna / write_verification | DONE | [Delivery report](docs/reviews/D-03.md); recovery rules and real-identity demo reviewed |
-| D-04 | Partner integration matrix and current source evidence | D-01 contracts briefing | Luna / write_integrations | DONE | [Delivery report](docs/reviews/D-04.md); all eight roles and evidence gates reviewed |
-| D-05 | Cross-document validation and independent Astra review | D-01, D-02, D-03, D-04 | Astra reviewer + coordinator | DONE | [Astra review: PASS](docs/reviews/D-05.md); required correction and scoped rereview complete |
-| D-06 | Final stopping-point handoff and affordable-model policy | D-05 | Coordinator + Luna audit | DONE | [Handoff review](docs/reviews/D-06.md); small I-01 steps and current model policy verified |
-| C-01 | Run requested CopilotKit onboarding and follow applicable setup instructions | Explicit user request | Coordinator + Luna verification | BLOCKED | PARTIAL: CLI 4.9.60, login, managed project and both keys verified; B-CPK-02: Next.js/Auth0/tenant-proposal prerequisites must exist before actual read-only inspector integration |
-| I-01 | Bootstrap compatible runtime and verify real core integration access | D-05 | Coordinator | IN_PROGRESS | Claimed 2026-09-12 01:15 UTC for Trigger.dev bootstrap; Node 24/npm verified, Trigger project initialized and local worker ready; remaining Slack/GitHub/database/OpenRouter preflight pending |
-| I-02 | PostgreSQL contracts, tenant scope, inbox/outbox and operations | I-01 runtime | Worker + reviewer | TODO | Focused DB transaction and isolation tests |
-| I-03 | Slack verification, mention intake, complete thread adapter and dispatch | I-02 | Worker + reviewer | TODO | Signed callbacks, deduplication, acknowledged durable acceptance |
-| I-04 | OpenRouter/OpenAI extraction, GitHub retrieval and immutable proposals | I-02, I-03 contracts | Worker + reviewer | TODO | Grounded schema-valid result with hard context limits |
-| I-05 | Slack review modal, named-actor approval, create/comment executor | I-03, I-04 | Worker + reviewer | TODO | Two real normal paths and authorization tests |
-| I-06 | Unknown-write reconciliation, recovery dispatcher and Slack result updates | I-05 | Worker + reviewer | TODO | Replay/crash/notification failure tests |
-| O-01 | Auth0-protected read-only proposal inspector | I-04, I-06 core gate | Auth worker + UI worker + reviewer | OPTIONAL | Defer if core slips; setup cap 15 minutes |
-| O-02 | CopilotKit read-only proposal explanation | O-01 | UI worker + reviewer | OPTIONAL | Server loads authorized context; no write tools |
-| O-03 | Approved sanitized Exa public documentation query | I-06 core gate | Adapter worker + reviewer | OPTIONAL | Exact query approval; timeout does not block core |
-| O-04 | Ambiguous AI read-only allowlisted demo runbook retrieval | I-06; saved coding time | Supporting worker + reviewer | OPTIONAL | Real API/schema required; no outbound workplace writes |
-| O-05 | Mozilla.ai offline evaluation on synthetic fixtures | I-06; saved coding time | Supporting worker + reviewer | OPTIONAL | Actual evaluation result; no production dependency |
-| V-01 | Required failure/security/tenant checks and deployed end-to-end verification | I-06 | Worker + reviewer | TODO | Protected finishing hour 1 |
-| V-02 | UI polish, demo rehearsal, documentation and integration evidence | V-01 | Presentation worker + reviewer | TODO | Protected finishing hour 2 |
-| S-01 | Multi-tenant SaaS expansion | V-02 | Future coordinator | DEFERRED | Outside six-hour MVP target |
+| D-01 | Canonical north star, roadmap, agent rules, source preservation, task briefs | — | Rob / coordinator | DONE | Root guides, task plan, configuration examples and checker verified; M0 accepted |
+| D-02 | Architecture, typed contracts, infrastructure, SaaS boundaries | D-01 contracts briefing | Rob / historical Astra | DONE | [Delivery report](docs/reviews/D-02.md); accepted by D-05 after contract alignment |
+| D-03 | Verification matrix, operations, two-minute demo | D-01 contracts briefing | Rob / historical Luna | DONE | [Delivery report](docs/reviews/D-03.md); recovery rules and real-identity demo reviewed |
+| D-04 | Partner integration matrix and current source evidence | D-01 contracts briefing | Rob / historical Luna | DONE | [Delivery report](docs/reviews/D-04.md); all eight roles and evidence gates reviewed |
+| D-05 | Cross-document validation and independent Astra review | D-01, D-02, D-03, D-04 | Rob / historical Astra reviewer | DONE | [Astra review: PASS](docs/reviews/D-05.md); required correction and scoped rereview complete |
+| D-06 | Final stopping-point handoff and affordable-model policy | D-05 | Rob / coordinator + historical Luna audit | DONE | [Handoff review](docs/reviews/D-06.md); small I-01 steps and current model policy verified |
+| C-01 | Run requested CopilotKit onboarding and follow applicable setup instructions | Explicit user request | Rob / coordinator + Luna verification | BLOCKED | PARTIAL: CLI 4.9.60, login, managed project and both keys verified; B-CPK-02: Next.js/Auth0/tenant-proposal prerequisites must exist before actual read-only inspector integration |
+| I-01 | Bootstrap compatible runtime and verify real core integration access | D-05 | Rob / affordable model | IN_PROGRESS | Claimed 2026-09-12 01:15 UTC for Trigger.dev bootstrap; Node 24/npm verified, Trigger project initialized and local worker ready; remaining Slack/GitHub/database/OpenRouter preflight pending |
+| I-02 | PostgreSQL contracts, tenant scope, inbox/outbox and operations | I-01 runtime | Rob / affordable model | TODO | Focused DB transaction and isolation tests |
+| I-03 | Slack verification, mention intake, complete thread adapter and dispatch | I-02 | Cesar / affordable model | TODO | Starts after I-02 interfaces are frozen; signed callbacks, deduplication, acknowledged durable acceptance |
+| I-04 | OpenRouter/OpenAI extraction, GitHub retrieval and immutable proposals | I-02, I-03 contracts | Rob / affordable model | TODO | Grounded schema-valid result with hard context limits |
+| I-05 | Slack review modal, named-actor approval, create/comment executor | I-03, I-04 | Cesar / affordable model | TODO | Starts after I-03 and I-04 interfaces are frozen; two real normal paths and authorization tests |
+| I-06 | Unknown-write reconciliation, recovery dispatcher and Slack result updates | I-05 | Rob / affordable model | TODO | Replay/crash/notification failure tests |
+| O-01 | Auth0-protected read-only proposal inspector | I-04, I-06 core gate | Cesar / affordable model; Rob auth review | OPTIONAL | Defer if core slips; setup cap 15 minutes |
+| O-02 | CopilotKit read-only proposal explanation | O-01 | Cesar / affordable model; Rob boundary review | OPTIONAL | Server loads authorized context; no write tools |
+| O-03 | Approved sanitized Exa public documentation query | I-06 core gate | Rob / affordable model | OPTIONAL | Exact query approval; timeout does not block core |
+| O-04 | Ambiguous AI read-only allowlisted demo runbook retrieval | I-06; saved coding time | Cesar / affordable model | OPTIONAL | Real API/schema required; no outbound workplace writes |
+| O-05 | Mozilla.ai offline evaluation on synthetic fixtures | I-06; saved coding time | Rob / affordable model | OPTIONAL | Actual evaluation result; no production dependency |
+| V-01 | Required failure/security/tenant checks and deployed end-to-end verification | I-06 | Rob / coordinator + reviewer | TODO | Protected finishing hour 1 |
+| V-02 | UI polish, demo rehearsal, documentation and integration evidence | V-01 | Rob lead; Cesar support | TODO | Protected finishing hour 2 |
+| S-01 | Multi-tenant SaaS expansion | V-02 | Rob + Cesar / future milestone | DEFERRED | Outside six-hour MVP target |
 
 Future owner roles use the affordable model selected by the user. Historical D-02/D-05 Astra ownership is retained as evidence only. No automatic upgrade or Astra escalation.
 
@@ -45,6 +45,8 @@ Statuses: `TODO`, `READY`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `OPTIONAL
 
 - C-01 claimed 2026-09-12 01:01 UTC by coordinator; owns the onboarding invocation, any necessary local setup artifacts and ledger changes. Verification: CLI outcome, relevant configuration checks and diff review. Existing product/authority contracts remain frozen; no general I-01 resumption implied.
 - I-01 claimed 2026-09-12 01:15 UTC by coordinator for the user-directed Trigger.dev setup. Owned files include package manifest/lockfile, Trigger config/task, tsconfig and `.gitignore` only for this bootstrap; verification is dependency/type/config checks plus local `trigger.dev dev` worker readiness. Trigger dashboard confirmation remains pending user browser sign-in.
+- Track assignment 2026-09-12: Rob is the coordinator and owns I-01, I-02, I-04, I-06, O-03, O-05, V-01, final V-02 integration, `tasks.md`, shared contracts, package/dependency files and the integrated branch. Cesar owns I-03, I-05, O-01, O-02, O-04 and assigned V-02 presentation/demo files in a separate checkout. Cesar's work starts only after the listed dependencies and interfaces are available.
+- Two-computer sync 2026-09-12: use `codex/signal-track-rob` and `codex/signal-track-cesar`; start from the latest integrated state. Cesar does not edit the ledger, shared contracts, product docs, or package/lock files. He hands Rob the task ID, changed-file list, commit/hash, verification commands/results, blockers and next dependency. Rob reviews and integrates the owned files, then records the ledger update before Cesar begins dependent work.
 - Coordinator: root Markdown guides, product requirements, implementation task plan, validation tooling, ledger integration.
 - D-02 claimed 2026-09-12 00:26 UTC; scope and verification sent to Astra `write_architecture`.
 - D-03 and D-04 claimed in the same documentation loop by Luna workers with disjoint file ownership.

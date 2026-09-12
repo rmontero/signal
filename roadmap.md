@@ -18,6 +18,43 @@ The build budget starts when implementation task I-01 is claimed. Documentation 
 
 Tests run during coding. The final two hours deepen verification and presentation rather than postponing all testing until the end.
 
+## Parallel tracks
+
+The track split changes ownership and handoff mechanics only. The north star, product scope, delivery clock, dependencies, contracts, gates, and cut rules remain unchanged.
+
+### Track Rob
+
+Rob is the coordinator and integration owner. This track owns the dependency foundations, model/retrieval behavior, recovery, release verification, and final documentation:
+
+- I-01 — runtime and provider-access preflight (currently in progress)
+- I-02 — tenant-aware persistence and application contracts
+- I-04 — grounded analysis and immutable proposals
+- I-06 — reconciliation and result delivery
+- O-03 and O-05, only after the core gate and within their existing timeboxes
+- V-01 and the final integration/documentation lead for V-02
+
+Rob also owns `tasks.md`, shared contracts, package manifests/lockfiles, dependency changes, and final integration.
+
+### Track Cesar
+
+Cesar works in a separate checkout and OpenAI account as the downstream Slack/GitHub interaction and inspector owner. This track begins each item only when its roadmap dependency is available:
+
+- I-03 — signed Slack ingestion and durable dispatch, after I-02 interfaces are frozen
+- I-05 — human approval and deterministic GitHub actions, after I-03 and I-04 interfaces are frozen
+- O-01 and O-02, only after the core gate and with Rob reviewing tenant/auth boundaries
+- O-04, only after the core gate and within its existing timebox
+- V-02 presentation and demo support, using files assigned by Rob during final integration
+
+Cesar may prepare tests or implementation work against the frozen interfaces, but must stop and hand off when a shared contract, dependency, package, or another track's file would need to change.
+
+### Keeping both tracks in sync
+
+- The integrated branch and `tasks.md` are the source of truth. Rob serializes ledger updates; Cesar sends task status, verification evidence, blockers, and the handoff commit before integration.
+- Use separate `codex/` branches, named `codex/signal-track-rob` and `codex/signal-track-cesar`. Start each work session by syncing from the latest integrated branch and rereading the current ready/claimed rows.
+- Each task has one owner and one bounded file set. Do not edit `north_star.md`, `roadmap.md`, `tasks.md`, `docs/PRODUCT.md`, `docs/CONTRACTS.md`, package/lock files, or shared types from Cesar's branch without an explicit coordinator ruling.
+- Rob reviews the handoff diff and focused checks, integrates only the owned files, then updates `tasks.md` with the result and the next dependency-unblocked task. Cesar starts the next item from that integrated state.
+- If a dependency or contract changes, pause the affected track, record the ruling and consequence in `tasks.md`, and resume only from the updated integrated state.
+
 ## Cut rules
 
 - If preflight exceeds 30 minutes, report the external blocker once and use local contract work where useful. Never represent local fixtures as live integrations.
