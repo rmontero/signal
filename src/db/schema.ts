@@ -92,10 +92,10 @@ export const observedEvents = pgTable("observed_events", {
   tenantId: text("tenant_id").notNull(), id: id(), source: text("source").notNull(), providerEventId: text("provider_event_id").notNull(), eventType: text("event_type").notNull(),
   channelId: text("channel_id"), threadTs: text("thread_ts"), messageTs: text("message_ts"), actorId: text("actor_id"),
   repositoryId: text("repository_id"), repositoryOwner: text("repository_owner"), repositoryName: text("repository_name"), installationId: text("installation_id"), pullRequestNumber: integer("pull_request_number"),
-  payloadHash: text("payload_hash").notNull(), createdAt: createdAt(),
+  payloadHash: text("payload_hash").notNull(), classificationState: text("classification_state").notNull().default("PENDING"), classificationReason: text("classification_reason"), evidenceRefs: jsonb("evidence_refs"), createdAt: createdAt(),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), unique("observed_events_provider_unique").on(table.tenantId, table.source, table.providerEventId),
-  check("observed_events_source_check", sql`${table.source} in ('slack','github')`),
+  check("observed_events_source_check", sql`${table.source} in ('slack','github')`), check("observed_events_classification_check", sql`${table.classificationState} in ('PENDING','SIGNAL','NOISE','BLOCKED')`),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "observed_events_tenant_fk" }),
 ]);
 
