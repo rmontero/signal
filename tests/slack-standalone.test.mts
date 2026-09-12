@@ -134,6 +134,26 @@ test("classifies only permitted app mentions and exposes the invoked thread coor
     ),
     { kind: "ignore", reason: "missing_fields" },
   );
+
+  for (const envelope of [
+    { team_id: "X1", event_id: "Ev5", event: { type: "app_mention", user: "U1", channel: "C1", ts: "1.1", text: "hi" } },
+    { team_id: "T1", event_id: "Ev6", event: { type: "app_mention", user: "X1", channel: "C1", ts: "1.1", text: "hi" } },
+    { team_id: "T1", event_id: "Ev7", event: { type: "app_mention", user: "U1", channel: "X1", ts: "1.1", text: "hi" } },
+    { team_id: "T1", event_id: "Ev8", event: { type: "app_mention", user: "U1", channel: "C1", ts: "1", text: "hi" } },
+  ]) {
+    assert.deepEqual(classifySlackEnvelope({ type: "event_callback", ...envelope }), {
+      kind: "ignore",
+      reason: "missing_fields",
+    });
+  }
+
+  assert.deepEqual(
+    classifySlackEnvelope(
+      { type: "event_callback", team_id: "T1", event_id: "Ev9", event: { type: "app_mention", user: "U1", channel: "C1", ts: "1.1", text: "hi", is_shared: "true" as unknown as boolean } },
+      { botUserId: "B1" },
+    ),
+    { kind: "ignore", reason: "missing_fields" },
+  );
 });
 
 test("fetches every thread page, preserves metadata, and excludes bot output from source messages", async () => {
@@ -199,6 +219,21 @@ test("rejects overflow and incomplete pagination instead of returning a partial 
           has_more: true,
           response_metadata: {},
         }),
+      },
+      { channelId: "C1", threadTs: "1.1" },
+    ),
+    (error: unknown) => (error as { code?: string }).code === "incomplete_thread",
+  );
+
+  let cycleCalls = 0;
+  await assert.rejects(
+    fetchCompleteSlackThread(
+      {
+        replies: async () => {
+          cycleCalls += 1;
+          const cursor = cycleCalls === 1 ? "cursor-a" : cycleCalls === 2 ? "cursor-b" : "cursor-a";
+          return { messages: [{ ts: `1.${cycleCalls}` }], has_more: true, response_metadata: { next_cursor: cursor } };
+        },
       },
       { channelId: "C1", threadTs: "1.1" },
     ),

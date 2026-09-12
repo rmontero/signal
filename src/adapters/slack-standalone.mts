@@ -37,6 +37,10 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function hasSlackId(value: unknown, pattern: RegExp): value is string {
+  return typeof value === "string" && pattern.test(value);
+}
+
 /** Verifies Slack's v0 signature against the original, unparsed request body. */
 export async function verifySlackRequestSignature(
   input: VerifySlackRequestInput,
@@ -153,6 +157,14 @@ export function classifySlackEnvelope(
   }
 
   if (
+    [event.is_shared, event.is_ext_shared_channel, envelope.is_ext_shared_channel].some(
+      (value) => value !== undefined && typeof value !== "boolean",
+    )
+  ) {
+    return { kind: "ignore", reason: "missing_fields" };
+  }
+
+  if (
     event.is_shared === true ||
     event.is_ext_shared_channel === true ||
     envelope.is_ext_shared_channel === true ||
@@ -163,18 +175,14 @@ export function classifySlackEnvelope(
 
   const threadTs = event.thread_ts ?? event.ts;
   if (
-    typeof envelope.team_id !== "string" ||
-    !envelope.team_id.trim() ||
-    typeof envelope.event_id !== "string" ||
-    !envelope.event_id.trim() ||
-    typeof event.channel !== "string" ||
-    !event.channel.trim() ||
-    typeof event.ts !== "string" ||
+    !hasSlackId(envelope.team_id, /^T[A-Z0-9]+$/) ||
+    !hasSlackId(envelope.event_id, /^Ev[A-Za-z0-9_-]+$/) ||
+    !hasSlackId(event.channel, /^[CDG][A-Z0-9]+$/) ||
+    !hasSlackId(event.ts, /^\d+\.\d+$/) ||
     !/^\d+\.\d+$/.test(event.ts) ||
     typeof threadTs !== "string" ||
     !/^\d+\.\d+$/.test(threadTs) ||
-    typeof event.user !== "string" ||
-    !event.user.trim() ||
+    !hasSlackId(event.user, /^[UW][A-Z0-9]+$/) ||
     typeof event.text !== "string"
   ) {
     return { kind: "ignore", reason: "missing_fields" };
@@ -298,11 +306,19 @@ export async function fetchCompleteSlackThread(
 
   const messages: SlackThreadMessage[] = [];
   const seenMessageTs = new Set<string>();
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let pageCount = 0;
   let hasMore = true;
 
   while (hasMore) {
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        throw new SlackThreadError("incomplete_thread", "Slack repeated a pagination cursor");
+      }
+      seenCursors.add(cursor);
+    }
+
     const request = {
       channel: options.channelId,
       ts: options.threadTs,
@@ -359,7 +375,7 @@ export async function fetchCompleteSlackThread(
       throw new SlackThreadError("incomplete_thread", "Slack indicated another page without a cursor");
     }
 
-    if (nextCursor && nextCursor === cursor) {
+    if (nextCursor && (nextCursor === cursor || seenCursors.has(nextCursor))) {
       throw new SlackThreadError("incomplete_thread", "Slack repeated the pagination cursor");
     }
 
