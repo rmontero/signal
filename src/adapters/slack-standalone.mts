@@ -235,14 +235,14 @@ export interface CompleteSlackThread {
 }
 
 export interface FetchSlackThreadOptions {
-  channelId: string;
-  threadTs: string;
+  channelId?: string;
+  threadTs?: string;
   botUserId?: string;
   botAppId?: string;
   maxMessages?: number;
   pageSize?: number;
   maxRateLimitRetries?: number;
-  wait?: (milliseconds: number) => Promise<void>;
+  wait?: (milliseconds: number) => Promise<unknown>;
 }
 
 export class SlackThreadError extends Error {
@@ -291,6 +291,8 @@ export async function fetchCompleteSlackThread(
   });
 
   if (
+    typeof options.channelId !== "string" ||
+    typeof options.threadTs !== "string" ||
     !Number.isSafeInteger(maxMessages) ||
     maxMessages < 1 ||
     maxMessages > 50 ||

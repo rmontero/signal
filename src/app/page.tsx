@@ -1,6 +1,9 @@
 import { MonitoringDashboard } from "../components/monitoring-dashboard";
-import { CURRENT_MONITORING_DATA } from "../lib/monitoring";
+import { loadMonitoringDashboardData } from "../lib/monitoring-data";
 
-export default function Home() {
-  return <MonitoringDashboard data={CURRENT_MONITORING_DATA} />;
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const data = await loadMonitoringDashboardData();
+  return <MonitoringDashboard data={data} />;
 }

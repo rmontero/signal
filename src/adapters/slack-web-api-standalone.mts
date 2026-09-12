@@ -1,5 +1,4 @@
 import type {
-  SlackRepliesClient,
   SlackRepliesPage,
   SlackThreadMessage,
 } from "./slack-standalone.mts";

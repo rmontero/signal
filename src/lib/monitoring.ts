@@ -1,3 +1,8 @@
+import type { PersistedConversationRow } from "../domain/contracts";
+import type { ConnectorSummary } from "./dashboard-settings";
+
+export type { PersistedConversationRow } from "../domain/contracts";
+
 export type ConversationSource = "slack" | "github";
 export type ConversationStatus = "needs-human" | "monitoring" | "resolved";
 export type ConversationPriority = "high" | "medium" | "low";
@@ -47,153 +52,73 @@ export type MonitoringMetrics = {
 };
 
 export type MonitoringDashboardData = {
-  mode: "PREVIEW" | "LIVE";
+  mode: "UNAVAILABLE" | "LIVE";
+  notice: string;
   conversations: MonitoredConversation[];
+  connectors: ConnectorSummary[];
 };
 
-export const CURRENT_MONITORING_DATA: MonitoringDashboardData = {
-  mode: "PREVIEW",
-  conversations: [
-    {
-      id: "release-ownership",
-      source: "slack",
-      status: "needs-human",
-      priority: "high",
-      title: "Canary rollout ownership is still open",
-      summary: "The rollout is technically ready, but nobody has confirmed the rollback owner or the customer communication window.",
-      workspace: "Talacha",
-      location: "#product-engineering",
-      participants: ["Maya", "Alex", "Priya", "6 people"],
-      lastActivity: "8 min ago",
-      activityTimestamp: "2026-09-12T16:52:00.000Z",
-      signalLabel: "Decision gap",
-      decisionQuestion: "Who can confirm the rollback owner and the customer communication window?",
-      confidence: 0.82,
-      tags: ["release", "ownership"],
-      signals: [
-        "Deployment checks are green across staging.",
-        "The rollback window is referenced by two people but has no named owner.",
-        "Customer communication is blocked on that decision.",
-      ],
-      evidence: [
-        { source: "slack", label: "#product-engineering", detail: "12 messages · 8 min ago", href: null },
-        { source: "github", label: "PR #842", detail: "payments / rollout", href: null },
-      ],
-      activity: [
-        { source: "slack", label: "Decision gap surfaced", detail: "Rollback owner is still unassigned", timestamp: "8 min ago" },
-        { source: "github", label: "PR updated", detail: "Staging checks passed", timestamp: "19 min ago" },
-      ],
-    },
-    {
-      id: "search-latency",
-      source: "github",
-      status: "monitoring",
-      priority: "medium",
-      title: "Search latency after the cache merge",
-      summary: "A performance regression is being investigated with a proposed cache change; the latest benchmark is still pending.",
-      workspace: "signal",
-      location: "PR #842",
-      participants: ["Rob", "Inez", "4 people"],
-      lastActivity: "24 min ago",
-      activityTimestamp: "2026-09-12T16:36:00.000Z",
-      signalLabel: "Technical signal",
-      decisionQuestion: null,
-      confidence: 0.91,
-      tags: ["performance", "cache"],
-      signals: [
-        "The regression is isolated to one query path.",
-        "The proposed change has review approval but no production benchmark.",
-      ],
-      evidence: [
-        { source: "github", label: "PR #842", detail: "6 comments · 24 min ago", href: null },
-        { source: "slack", label: "#platform", detail: "3 references · today", href: null },
-      ],
-      activity: [
-        { source: "github", label: "Review discussion", detail: "Benchmark requested before merge", timestamp: "24 min ago" },
-      ],
-    },
-    {
-      id: "renewal-rollout",
-      source: "slack",
-      status: "needs-human",
-      priority: "medium",
-      title: "Enterprise renewal rollout needs a decision",
-      summary: "The squad agrees on the rollout sequence but is split on whether support coverage is sufficient for the first wave.",
-      workspace: "Talacha",
-      location: "#customer-ops",
-      participants: ["Dana", "Leo", "8 people"],
-      lastActivity: "42 min ago",
-      activityTimestamp: "2026-09-12T16:18:00.000Z",
-      signalLabel: "Capacity question",
-      decisionQuestion: "Should the first wave stay at ten accounts, or should support coverage be expanded first?",
-      confidence: 0.76,
-      tags: ["customer", "capacity"],
-      signals: [
-        "Product and sales are aligned on the first-wave account list.",
-        "Support has one unresolved capacity concern.",
-      ],
-      evidence: [
-        { source: "slack", label: "#customer-ops", detail: "18 messages · 42 min ago", href: null },
-      ],
-      activity: [
-        { source: "slack", label: "Human input suggested", detail: "Support coverage remains unresolved", timestamp: "42 min ago" },
-      ],
-    },
-    {
-      id: "auth-cleanup",
-      source: "github",
-      status: "resolved",
-      priority: "low",
-      title: "Auth callback cleanup is moving through review",
-      summary: "The agent found no unresolved decision, owner gap, or material risk in the latest review discussion.",
-      workspace: "signal",
-      location: "PR #157",
-      participants: ["Maya", "3 people"],
-      lastActivity: "1 hr ago",
-      activityTimestamp: "2026-09-12T15:58:00.000Z",
-      signalLabel: "No action needed",
-      decisionQuestion: null,
-      confidence: 0.97,
-      tags: ["auth", "cleanup"],
-      signals: ["Review comments are resolved and the deployment owner is named."],
-      evidence: [
-        { source: "github", label: "PR #157", detail: "4 comments · 1 hr ago", href: null },
-      ],
-      activity: [
-        { source: "github", label: "Resolved", detail: "All review comments addressed", timestamp: "1 hr ago" },
-      ],
-    },
-    {
-      id: "regional-timeout",
-      source: "slack",
-      status: "needs-human",
-      priority: "high",
-      title: "Regional timeout follow-up lacks an owner",
-      summary: "The incident is contained, but the follow-up work has no accountable owner and the customer impact summary is incomplete.",
-      workspace: "Talacha",
-      location: "#platform",
-      participants: ["Ana", "Carlos", "5 people"],
-      lastActivity: "2 hr ago",
-      activityTimestamp: "2026-09-12T14:52:00.000Z",
-      signalLabel: "Owner gap",
-      decisionQuestion: "Who owns the customer impact summary and the follow-up remediation review?",
-      confidence: 0.88,
-      tags: ["incident", "follow-up"],
-      signals: [
-        "Error rates returned to baseline after the configuration rollback.",
-        "The customer impact window is still being reconstructed.",
-        "Two remediation ideas exist without an accountable owner.",
-      ],
-      evidence: [
-        { source: "slack", label: "#platform", detail: "21 messages · 2 hr ago", href: null },
-        { source: "github", label: "PR #161", detail: "remediation draft", href: null },
-      ],
-      activity: [
-        { source: "slack", label: "Owner gap surfaced", detail: "Follow-up review has no accountable owner", timestamp: "2 hr ago" },
-      ],
-    },
-  ],
-};
+function formatPersistedDate(value: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(value);
+}
+
+function proposalTitle(mutation: unknown): string | null {
+  if (!mutation || typeof mutation !== "object") return null;
+  const title = (mutation as { title?: unknown }).title;
+  return typeof title === "string" && title.trim() ? title.trim() : null;
+}
+
+export function mapPersistedConversation(row: PersistedConversationRow): MonitoredConversation {
+  const resolved = row.operationState === "SUCCEEDED" || ["DISMISSED", "SUPERSEDED", "EXPIRED"].includes(row.proposalState ?? "");
+  const attention = row.proposalState === "PENDING" || row.operationState === "UNKNOWN";
+  const activityDate = row.operationCreatedAt ?? row.threadCreatedAt;
+  const title = proposalTitle(row.proposalMutation) ?? `Conversation in #${row.channelId}`;
+
+  return {
+    id: `${row.tenantId}:${row.threadId}`,
+    source: "slack",
+    status: resolved ? "resolved" : attention ? "needs-human" : "monitoring",
+    priority: attention ? "high" : resolved ? "low" : "medium",
+    title,
+    summary: row.proposalState === "PENDING"
+      ? "A persisted issue proposal is waiting for named Slack approval."
+      : row.operationState === "UNKNOWN"
+        ? "The last external operation is uncertain and requires reconciliation before any retry."
+        : "Signal is monitoring this tenant-scoped Slack thread.",
+    workspace: `${row.repositoryOwner}/${row.repositoryName}`,
+    location: `#${row.channelId}`,
+    participants: ["Slack thread"],
+    lastActivity: formatPersistedDate(activityDate),
+    activityTimestamp: activityDate.toISOString(),
+    signalLabel: row.proposalState === "PENDING" ? "Decision gap" : row.operationState === "UNKNOWN" ? "Reconciliation needed" : resolved ? "Resolved" : "Monitoring",
+    decisionQuestion: row.proposalState === "PENDING"
+      ? "Can a named Slack approver review this proposal?"
+      : row.operationState === "UNKNOWN"
+        ? "Can the operation be reconciled before any further action?"
+        : null,
+    evidence: [
+      { source: "slack", label: "Slack thread", detail: `Thread ${row.threadTs}`, href: null },
+    ],
+    activity: [
+      {
+        source: "slack",
+        label: row.proposalState === "PENDING" ? "Proposal persisted" : "Thread persisted",
+        detail: row.proposalState === "PENDING" ? "Awaiting named Slack approval" : "Tenant-scoped record loaded from Neon",
+        timestamp: formatPersistedDate(activityDate),
+      },
+    ],
+    confidence: undefined,
+    tags: row.proposalState === "PENDING" ? ["proposal", "approval"] : ["thread"],
+    signals: row.proposalState === "PENDING"
+      ? [`Proposal version ${row.proposalVersion ?? "unknown"} is persisted for review.`]
+      : ["No model-generated signal is stored for this record yet."],
+  };
+}
 
 export function filterConversations(
   conversations: MonitoredConversation[],

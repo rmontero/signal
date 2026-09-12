@@ -7,6 +7,22 @@ const timestamp = z.string().datetime({ offset: true });
 export const TenantContextSchema = z.object({ tenantId: id }).strict();
 export type TenantContext = z.infer<typeof TenantContextSchema>;
 
+export type PersistedConversationRow = {
+  tenantId: string;
+  threadId: string;
+  channelId: string;
+  threadTs: string;
+  repositoryOwner: string;
+  repositoryName: string;
+  threadCreatedAt: Date;
+  proposalId: string | null;
+  proposalState: string | null;
+  proposalVersion: number | null;
+  proposalMutation: unknown;
+  operationState: string | null;
+  operationCreatedAt: Date | null;
+};
+
 export const TaskInputSchema = z.object({ tenantId: id, jobId: id, schemaVersion: z.literal(1) }).strict();
 export type TaskInput = z.infer<typeof TaskInputSchema>;
 

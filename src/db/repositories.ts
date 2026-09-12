@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { SignalDb } from "./client";
 import { isUniqueViolation } from "./errors";
 import { approvals, audit, channelMappings, inbox, operations, outbox, proposals, snapshots, tenants, threads } from "./schema";
-import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, type Mutation, payloadHash, prepareMutation } from "../domain/contracts";
+import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, type Mutation, payloadHash, prepareMutation, type PersistedConversationRow } from "../domain/contracts";
 
 export class PersistenceConflict extends Error {
   constructor(message: string) { super(message); this.name = "PersistenceConflict"; }
@@ -95,4 +95,41 @@ export async function recordSuccessfulResult(db: SignalDb, input: { tenantId: st
 
 export async function appendAudit(db: SignalDb, input: { tenantId: string; actorSlackId?: string; entityType: string; entityId: string; fromState?: string; toState?: string; payloadHash?: string }): Promise<void> {
   await db.insert(audit).values({ id: randomUUID(), ...input });
+}
+
+export async function listMonitoringConversations(db: SignalDb, tenantId: string): Promise<PersistedConversationRow[]> {
+  const activeTenant = await db.select({ id: tenants.id }).from(tenants).where(and(eq(tenants.id, tenantId), eq(tenants.active, true))).limit(1);
+  if (!activeTenant[0]) return [];
+
+  const rows = await db
+    .select({
+      tenantId: threads.tenantId,
+      threadId: threads.id,
+      channelId: threads.channelId,
+      threadTs: threads.threadTs,
+      repositoryOwner: channelMappings.repositoryOwner,
+      repositoryName: channelMappings.repositoryName,
+      threadCreatedAt: threads.createdAt,
+      proposalId: proposals.id,
+      proposalState: proposals.state,
+      proposalVersion: proposals.version,
+      proposalMutation: proposals.mutation,
+      operationState: operations.state,
+      operationCreatedAt: operations.createdAt,
+    })
+    .from(threads)
+    .innerJoin(channelMappings, and(eq(channelMappings.tenantId, threads.tenantId), eq(channelMappings.channelId, threads.channelId), eq(channelMappings.enabled, true)))
+    .leftJoin(proposals, and(eq(proposals.tenantId, threads.tenantId), eq(proposals.threadId, threads.id)))
+    .leftJoin(operations, and(eq(operations.tenantId, proposals.tenantId), eq(operations.proposalId, proposals.id)))
+    .where(eq(threads.tenantId, tenantId))
+    .orderBy(desc(threads.createdAt));
+
+  const latestByThread = new Map<string, PersistedConversationRow>();
+  for (const row of rows) {
+    const existing = latestByThread.get(row.threadId);
+    if (!existing || (row.proposalVersion ?? 0) > (existing.proposalVersion ?? 0)) {
+      latestByThread.set(row.threadId, row);
+    }
+  }
+  return [...latestByThread.values()];
 }

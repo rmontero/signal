@@ -15,6 +15,7 @@ An agent may begin autonomous coding only after the configuration below is popul
 | Setting | Required state and verification |
 |---|---|
 | `APP_BASE_URL` | Canonical local/preview URL reachable by callbacks; verify the health route after boot |
+| `SIGNAL_DASHBOARD_TENANT_ID` | Server-only MVP dashboard tenant context; must be an active tenant ID and is never accepted from browser input |
 | `DATABASE_URL` | Pooled Neon runtime connection; verify a harmless query and tenant-scoped transaction |
 | `DATABASE_URL_UNPOOLED` | Direct Neon migration connection; verify migrations can run separately from pooled access |
 | `TRIGGER_PROJECT_REF` | `proj_cehggonaqopuuhibihif`; verify the CLI targets the intended project/environment |
@@ -70,6 +71,7 @@ The readiness result belongs in `tasks.md` with `PASS`, `PARTIAL`, `FAIL` or `NO
 | Exact input name | Meaning / destination |
 |---|---|
 | `APP_BASE_URL` | Canonical HTTPS URL; Vercel and Trigger |
+| `SIGNAL_DASHBOARD_TENANT_ID` | Explicit server-only tenant context for the MVP dashboard; never expose or accept from the browser |
 | `DATABASE_URL` | Pooled runtime Neon connection; Vercel and Trigger |
 | `DATABASE_URL_UNPOOLED` | Migration connection; authorized local/CI migration environment only |
 | `TRIGGER_PROJECT_REF` | Existing Trigger project reference; build/deploy configuration |

@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   filterConversations,
   getMonitoringMetrics,
+  mapPersistedConversation,
   type MonitoredConversation,
+  type PersistedConversationRow,
 } from "../../src/lib/monitoring.ts";
 
 const conversations: MonitoredConversation[] = [
@@ -61,5 +63,48 @@ test("computes open, attention, source, and signal metrics", () => {
     needsHuman: 1,
     slack: 1,
     github: 1,
+  });
+});
+
+test("maps a persisted tenant-scoped proposal into a real dashboard conversation", () => {
+  const row: PersistedConversationRow = {
+    tenantId: "tenant-1",
+    threadId: "thread-1",
+    channelId: "C123",
+    threadTs: "1710000000.000001",
+    repositoryOwner: "signal-test",
+    repositoryName: "fixtures",
+    threadCreatedAt: new Date("2026-09-12T16:00:00.000Z"),
+    proposalId: "proposal-1",
+    proposalState: "PENDING",
+    proposalVersion: 1,
+    proposalMutation: { kind: "CREATE_ISSUE", title: "Persist the fixture" },
+    operationState: "READY",
+    operationCreatedAt: new Date("2026-09-12T16:02:00.000Z"),
+  };
+
+  assert.deepEqual(mapPersistedConversation(row), {
+    id: "tenant-1:thread-1",
+    source: "slack",
+    status: "needs-human",
+    priority: "high",
+    title: "Persist the fixture",
+    summary: "A persisted issue proposal is waiting for named Slack approval.",
+    workspace: "signal-test/fixtures",
+    location: "#C123",
+    participants: ["Slack thread"],
+    lastActivity: "Sep 12, 2026",
+    activityTimestamp: "2026-09-12T16:02:00.000Z",
+    signalLabel: "Decision gap",
+    decisionQuestion: "Can a named Slack approver review this proposal?",
+    evidence: [
+      { source: "slack", label: "Slack thread", detail: "Thread 1710000000.000001", href: null },
+    ],
+    activity: [
+      { source: "slack", label: "Proposal persisted", detail: "Awaiting named Slack approval", timestamp: "Sep 12, 2026" },
+    ],
+    confidence: undefined,
+    tags: ["proposal", "approval"],
+    signals: ["Proposal version 1 is persisted for review."],
   });
 });
