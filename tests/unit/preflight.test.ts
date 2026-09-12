@@ -6,7 +6,7 @@ import {
   CURRENT_OPTIONAL_VARIABLES,
   FULL_CORE_VARIABLES,
   evaluatePreflight,
-} from "../scripts/preflight.ts";
+} from "../../scripts/preflight.ts";
 
 test("default preflight evaluates only the variables in the current development scope", () => {
   const result = evaluatePreflight(
