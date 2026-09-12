@@ -29,6 +29,8 @@ An agent may begin autonomous coding only after the configuration below is popul
 
 The core gate is all required names present, a real database transaction, a data-free Trigger probe, a full permitted Slack thread read, GitHub repository/permission reads, and one schema-valid OpenRouter response. Missing application code is a work item after this gate, not a reason to fabricate provider success.
 
+While implementation is in progress, `npm run preflight` uses the populated development scope only: `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `TRIGGER_SECRET_KEY`, `OPENROUTER_API_KEY`, and the currently present optional names. This lets local contract and application work proceed without treating absent future-provider values as a successful live gate. Run `npm run preflight -- --strict` to evaluate the complete required-variable list before enabling autonomous provider execution or release acceptance. Both modes print names and statuses only; neither mode prints secret values.
+
 ### Optional settings, enabled only after their own acceptance checks
 
 | Setting | Use and prerequisite |
