@@ -109,7 +109,7 @@ function validateIssueInput(input: GitHubCreateIssueInput): void {
   if (
     input.assignees.length > 1 ||
     input.assignees.some(
-      (assignee) => typeof assignee !== "string" || !assignee || !isProviderSegment(assignee),
+      (assignee) => !isGitHubLogin(assignee),
     )
   ) {
     throw new GitHubWriteError("invalid_input", "At most one valid GitHub assignee is allowed");
@@ -203,7 +203,10 @@ async function postJson(
 
 function parseIdentifier(value: unknown): string | undefined {
   if (typeof value === "string" && /^\d+$/.test(value) && value === value.trim()) {
-    return value;
+    const numericValue = Number(value);
+    if (Number.isSafeInteger(numericValue) && numericValue > 0 && String(numericValue) === value) {
+      return value;
+    }
   }
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return String(value);

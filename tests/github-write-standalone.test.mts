@@ -140,6 +140,13 @@ test("rejects invalid repository or mutation input before making a request", asy
     (error: unknown) => (error as { code?: string }).code === "invalid_input",
   );
 
+  for (const assignee of ["foo_bar", "a".repeat(40)]) {
+    await assert.rejects(
+      client.createIssue({ owner: "acme", repo: "signal", title: "Title", body: "Body", assignees: [assignee] }),
+      (error: unknown) => (error as { code?: string }).code === "invalid_input",
+    );
+  }
+
   await assert.rejects(
     client.createIssue({ owner: "acme", repo: "signal", title: "x".repeat(257), body: "Body", assignees: [] }),
     (error: unknown) => (error as { code?: string }).code === "invalid_input",
@@ -237,6 +244,9 @@ test("treats a malformed successful response as unknown", async () => {
   for (const payload of [
     { ok: true },
     { id: "abc", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
+    { id: "0", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
+    { id: "000", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
+    { id: "9007199254740992", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
     { id: " ", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
     { id: 101, number: 0, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
     { id: 101, number: 42, html_url: "", assignees: [] },
