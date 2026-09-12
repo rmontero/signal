@@ -16,6 +16,16 @@ const mutation: Mutation = {
 };
 
 const validPayloadHash = payloadHash({ schemaVersion: 1, tenantId: "tenant-1", operationId: "op-1", version: 1, mutation });
+const commentMutation: Mutation = {
+  kind: "ADD_PROGRESS_COMMENT",
+  repoId: "repo-1",
+  owner: "acme",
+  repo: "signal",
+  issueId: "9010",
+  issueNumber: 10,
+  body: "Progress update\n<!-- signal-operation:op-comment -->",
+};
+const commentPayloadHash = payloadHash({ schemaVersion: 1, tenantId: "tenant-1", operationId: "op-comment", version: 1, mutation: commentMutation });
 
 const proposal: ApprovedProposal = {
   tenantId: "tenant-1", proposalId: "proposal-1", operationId: "op-1", version: 1, payloadHash: validPayloadHash,
@@ -102,4 +112,56 @@ test("does not mark success when GitHub returns an identity outside the approved
   }));
   assert.equal(result.state, "UNKNOWN");
   assert.equal(unknown, true);
+});
+
+test("revalidates an open issue before sending an exact progress comment", async () => {
+  const commentProposal: ApprovedProposal = { ...proposal, proposalId: "proposal-comment", operationId: "op-comment", payloadHash: commentPayloadHash, mutation: commentMutation };
+  let posted: unknown;
+  let read: unknown;
+  const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-comment" }, dependencies({
+    loadApprovedProposal: async () => commentProposal,
+    githubRead: { getIssue: async (input) => { read = input; return { id: "9010", number: 10, title: "Release", htmlUrl: "https://github.com/acme/signal/issues/10", state: "open", isPullRequest: false, authorLogin: null }; } },
+    github: { createIssue: async () => { throw new Error("unexpected issue creation"); }, addProgressComment: async (input) => { posted = input; return { id: "comment-1", url: "https://github.com/acme/signal/issues/10#issuecomment-1" }; } },
+  }));
+
+  assert.equal(result.state, "SUCCEEDED");
+  assert.deepEqual(read, { owner: "acme", repo: "signal", issueNumber: 10 });
+  assert.deepEqual(posted, { owner: "acme", repo: "signal", issueNumber: 10, body: commentMutation.body });
+});
+
+test("does not post a comment when the target is closed, a pull request, or a different issue", async () => {
+  const commentProposal: ApprovedProposal = { ...proposal, proposalId: "proposal-comment", operationId: "op-comment", payloadHash: commentPayloadHash, mutation: commentMutation };
+  for (const target of [
+    { id: "9010", number: 10, state: "closed" as const, isPullRequest: false },
+    { id: "9010", number: 10, state: "open" as const, isPullRequest: true },
+    { id: "9999", number: 10, state: "open" as const, isPullRequest: false },
+  ]) {
+    let posts = 0;
+    let stale = 0;
+    let claimed = 0;
+    const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: `attempt-${target.id}-${target.state}-${target.isPullRequest}` }, dependencies({
+      loadApprovedProposal: async () => commentProposal,
+      claimMutation: async () => { claimed += 1; return { fencingToken: 4 }; },
+      githubRead: { getIssue: async () => ({ ...target, title: "Release", htmlUrl: "https://github.com/acme/signal/issues/10", authorLogin: null }) },
+      github: { createIssue: async () => { throw new Error("unexpected issue creation"); }, addProgressComment: async () => { posts += 1; return { id: "comment-1", url: "https://github.com/acme/signal/issues/10#issuecomment-1" }; } },
+      recordStale: async () => { stale += 1; },
+    }));
+    assert.equal(result.state, "STALE");
+    assert.equal(posts, 0);
+    assert.equal(claimed, 0);
+    assert.equal(stale, 1);
+  }
+});
+
+test("blocks comment execution without a trustworthy target read and never posts", async () => {
+  const commentProposal: ApprovedProposal = { ...proposal, proposalId: "proposal-comment", operationId: "op-comment", payloadHash: commentPayloadHash, mutation: commentMutation };
+  let posts = 0;
+  const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-comment" }, dependencies({
+    loadApprovedProposal: async () => commentProposal,
+    githubRead: { getIssue: async () => { throw new Error("read unavailable"); } },
+    github: { createIssue: async () => { throw new Error("unexpected issue creation"); }, addProgressComment: async () => { posts += 1; return { id: "comment-1", url: "https://github.com/acme/signal/issues/10#issuecomment-1" }; } },
+  }));
+
+  assert.equal(result.state, "BLOCKED");
+  assert.equal(posts, 0);
 });

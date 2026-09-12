@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Mutation } from "../src/domain/contracts";
-import { ApprovalError, openProposalReview, renderApprovalModal, submitProposalApproval, type ApprovalDependencies, type ApprovalProposal } from "../src/services/approve";
+import { ApprovalError, dismissProposal, openProposalReview, prepareProposalReview, recordProposalReview, renderApprovalModal, submitProposalApproval, type ApprovalDependencies, type ApprovalProposal } from "../src/services/approve";
 
 const mutation: Mutation = {
   kind: "CREATE_ISSUE",
@@ -61,6 +61,20 @@ test("opens a review only for a pending, unexpired proposal and records modal id
   });
 });
 
+test("prepares a review before Slack assigns the modal id and records the returned id", async () => {
+  const prepared = await prepareProposalReview({
+    tenantId: "tenant-1", proposalId: "proposal-1", slackTeamId: "T1", channelId: "C1", actorSlackId: "U2",
+  }, dependencies());
+  const reviews: unknown[] = [];
+
+  await recordProposalReview(prepared, "V-real-view-id", dependencies({ recordReview: async (input) => { reviews.push(input); } }));
+
+  assert.equal(prepared.result.proposalId, "proposal-1");
+  assert.deepEqual(reviews, [{
+    tenantId: "tenant-1", proposalId: "proposal-1", modalId: "V-real-view-id", actorSlackId: "U2", slackTeamId: "T1", channelId: "C1", version: 1,
+  }]);
+});
+
 test("requires the named approver and exact review metadata before approval", async () => {
   let approved = false;
   await assert.rejects(
@@ -105,6 +119,15 @@ test("rejects cross-tenant or cross-channel review hints without persistence", a
     (error: unknown) => error instanceof ApprovalError && error.code === "approval_not_found",
   );
   assert.equal(recorded, false);
+});
+
+test("does not dismiss a stale proposal-card version", async () => {
+  let dismissed = false;
+  await assert.rejects(
+    dismissProposal({ tenantId: "tenant-1", proposalId: "proposal-1", slackTeamId: "T1", channelId: "C1", actorSlackId: "U1", version: 2 }, dependencies({ dismiss: async () => { dismissed = true; } })),
+    (error: unknown) => error instanceof ApprovalError && error.code === "approval_stale",
+  );
+  assert.equal(dismissed, false);
 });
 
 test("renders a read-only modal with complete escaped payload data and no technical marker", async () => {
