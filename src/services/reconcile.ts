@@ -1,4 +1,5 @@
 import type { Mutation, OperationState } from "../domain/contracts";
+import type { GitHubReconciliationRecord } from "../adapters/github-read";
 
 export type ReconciliationRecord = {
   id: string;
@@ -30,8 +31,8 @@ export interface ReconciliationDependencies {
   loadOperation: (input: { tenantId: string; operationId: string }) => Promise<UnknownOperation | null>;
   isOwningAttemptTerminal: (input: { tenantId: string; operationId: string; attemptId: string }) => Promise<boolean>;
   transitionSendingToUnknown: (input: { tenantId: string; operationId: string; ownerAttemptId: string; errorCode: string }) => Promise<boolean>;
-  listIssues: (input: { owner: string; repo: string }) => Promise<ReconciliationRecord[]>;
-  listComments: (input: { owner: string; repo: string; issueNumber: number }) => Promise<ReconciliationRecord[]>;
+  listIssues: (input: { owner: string; repo: string }) => Promise<ReconciliationRecord[] | GitHubReconciliationRecord[]>;
+  listComments: (input: { owner: string; repo: string; issueNumber: number }) => Promise<ReconciliationRecord[] | GitHubReconciliationRecord[]>;
   recordSuccess: (input: { tenantId: string; operationId: string; externalId: string; externalUrl: string }) => Promise<{ jobId: string } | null>;
   recordUnresolved: (input: { tenantId: string; operationId: string; errorCode: string; resolutionNote: string }) => Promise<void>;
 }
