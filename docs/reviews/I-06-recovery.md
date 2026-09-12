@@ -44,18 +44,6 @@ binds the note to the loaded owner/fence and leaves note writes disabled for
 and completed-result cases. No remaining concrete bug was found in this
 correction.
 
-### P2 — Unresolved reconciliation notes are not fenced
-
-`src/db/repositories.ts:398-400` updates an `UNKNOWN` operation using only tenant,
-operation ID, and state. It does not carry the owner attempt or fencing token
-that authorized the reconciliation read. Concurrent reconciliation attempts can
-overwrite each other's error code and resolution note without proving current
-authority.
-
-Required correction: pass owner attempt and fencing token through
-`recordUnresolvedOperation` and include both in the conditional update. Treat a
-zero-row update as lost authority and do not overwrite a newer outcome.
-
 ## Verified correction areas
 
 - **PASS, service gate:** `src/services/reconcile.ts:61-82` requires an expired
