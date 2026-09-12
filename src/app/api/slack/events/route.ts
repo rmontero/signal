@@ -2,7 +2,7 @@ import { classifySlackEnvelope, classifySlackObserverEnvelope, verifySlackReques
 import { acceptMention, acceptObserverEvent, resolveSlackObserverTenant } from "../../../../db/repositories";
 import { createDb } from "../../../../db/client";
 import { createObserverEventInput } from "../../../../domain/observer-events";
-import { dispatchOutboxJob } from "../../../../trigger/dispatch";
+import { dispatchStoredOutboxJob } from "../../../../trigger/outbox";
 
 export const runtime = "nodejs";
 
@@ -37,7 +37,7 @@ export async function POST(request: Request): Promise<Response> {
       const tenantId = await resolveSlackObserverTenant(db, { slackTeamId: mention.teamId, channelId: mention.channelId });
       if (!tenantId) return json({ ok: true }, 202);
       const accepted = await acceptMention(db, { tenantId, slackEventId: mention.eventId, slackTeamId: mention.teamId, channelId: mention.channelId, threadTs: mention.threadTs, messageTs: mention.messageTs, actorSlackId: mention.userId });
-      try { await dispatchOutboxJob({ tenantId, jobId: accepted.jobId, taskId: "signal.analyze-thread", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
+      try { await dispatchStoredOutboxJob(db, { tenantId, jobId: accepted.jobId, taskId: "signal.analyze-thread", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
       return json({ ok: true, duplicate: accepted.duplicate });
     } catch {
       return json({ error: "Observer unavailable" }, 503);
@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
       rawBody,
     });
     const accepted = await acceptObserverEvent(db, input);
-    try { await dispatchOutboxJob({ tenantId, jobId: accepted.jobId, taskId: "signal.observe-event", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
+    try { await dispatchStoredOutboxJob(db, { tenantId, jobId: accepted.jobId, taskId: "signal.observe-event", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
     return json({ ok: true, duplicate: accepted.duplicate });
   } catch {
     return json({ error: "Observer unavailable" }, 503);

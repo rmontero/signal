@@ -50,7 +50,7 @@ Mozilla.ai has no environment credential in this design. Its evaluator runs offl
 
 ### Non-env setup that is still mandatory
 
-Store the validated Talacha.dev Slack workspace/channel and GitHub repository mappings in `config/pilot.local.json` (ignored), including named approvers and Slack-to-GitHub identities. Keep the Ambiguous agent credential in the project-local `.ambi/config.json` (ignored). Configure the Trigger task runtime secret store separately from the local shell. Register Auth0 callback/logout URLs and the CopilotKit project only when those optional features are enabled.
+Store the validated Talacha.dev Slack workspace/channel and GitHub repository mappings in `config/pilot.local.json` (ignored), including named approvers and Slack-to-GitHub identities. Import that file transactionally with `npm run pilot:import`; the importer disables removed mappings and increments the tenant configuration version. Keep the Ambiguous agent credential in the project-local `.ambi/config.json` (ignored). Configure the Trigger task runtime secret store separately from the local shell. Register Auth0 callback/logout URLs and the CopilotKit project only when those optional features are enabled.
 
 ### Pre-flight order
 

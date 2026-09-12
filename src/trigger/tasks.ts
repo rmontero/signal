@@ -1,13 +1,17 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { AbortTaskRunError, logger, schedules, schemaTask } from "@trigger.dev/sdk";
+import { z } from "zod";
 import { createGitHubReadClient } from "../adapters/github-read";
 import { createGitHubWriteClient } from "../adapters/github-write-standalone.mts";
 import { createOpenRouterClient } from "../adapters/openrouter";
 import { createSlackApiClient } from "../adapters/slack-api";
+import { confirmTerminalTriggerRun } from "../adapters/trigger-run-status";
 import { createSlackRepliesClient } from "../adapters/slack-web-api-standalone.mts";
 import { fetchCompleteSlackThread } from "../adapters/slack-standalone.mts";
 import { createDb } from "../db/client";
-import { loadApprovedProposalForExecution, loadIdentityMappings, loadInboxContext, loadNotificationContext, loadObservedEvent, loadOutboxJob, loadRepositoryInstallation, loadUnknownOperation, persistAnalyzedProposal, recordFailedResult, recordReconciledResult, recordStaleResult, recordSuccessfulResult, recordUnresolvedOperation, recordUnknownResult, setNotificationMessageTs, transitionSendingToUnknown } from "../db/repositories";
+import { cleanupRetention, loadApprovedProposalForExecution, loadIdentityMappings, loadInboxContext, loadMappedRepository, loadNotificationContext, loadObservedEvent, loadOutboxJob, loadOwningExecutionRun, loadRepositoryInstallation, loadUnknownOperation, persistAnalyzedProposal, recordFailedResult, recordObserverClassification, recordReconciledResult, recordStaleResult, recordSuccessfulResult, recordUnresolvedOperation, recordUnknownResult, setNotificationMessageTs, transitionSendingToUnknown } from "../db/repositories";
+import { recoverOutbox } from "../services/recover-outbox";
+import { recordOutboxExecutionOwner } from "../db/repositories";
 import { TaskInputSchema } from "../domain/contracts";
 import { analyzeThread } from "../services/analyze";
 import { executeApprovedProposal } from "../services/execute";
@@ -16,6 +20,8 @@ import { deliverResultNotification } from "../services/notify";
 import { renderProposalCard } from "../services/proposal-card";
 
 const taskInput = TaskInputSchema;
+const ObserverClassificationSchema = z.object({ meaningful: z.boolean(), reason: z.string().trim().min(1).max(240), evidenceMessageTs: z.array(z.string().trim().min(1)).max(5) }).strict();
+const OBSERVER_CLASSIFICATION_JSON_SCHEMA = { type: "object", additionalProperties: false, properties: { meaningful: { type: "boolean" }, reason: { type: "string", minLength: 1, maxLength: 240 }, evidenceMessageTs: { type: "array", maxItems: 5, items: { type: "string", minLength: 1 } } }, required: ["meaningful", "reason", "evidenceMessageTs"] } as const;
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -50,9 +56,32 @@ export const observeEventTask = schemaTask({
       if (!job?.observerEventId) throw new AbortTaskRunError("observer job is unavailable");
       const event = await loadObservedEvent(db, { tenantId: payload.tenantId, eventId: job.observerEventId });
       if (!event) throw new AbortTaskRunError("observer event is unavailable");
-      // Passive observation deliberately records no proposal and performs no GitHub write.
-      logger.info("Signal observer event accepted", { tenantId: payload.tenantId, eventId: event.id, source: event.source, eventType: event.eventType });
-      return { status: "observed" as const, eventId: event.id };
+      const model = createOpenRouterClient({ apiKey: requiredEnv("OPENROUTER_API_KEY"), model: requiredEnv("OPENROUTER_MODEL") });
+      let classification: z.infer<typeof ObserverClassificationSchema>;
+      let evidenceRefs: unknown[] = [];
+      if (event.source === "slack") {
+        if (!event.channelId || !event.threadTs) throw new AbortTaskRunError("Slack observer coordinates are incomplete");
+        const complete = await fetchCompleteSlackThread(createSlackRepliesClient({ botToken: requiredEnv("SLACK_BOT_TOKEN") }), { channelId: event.channelId, threadTs: event.threadTs, maxMessages: 50, pageSize: 100 });
+        const messages = complete.sourceMessages.filter((message) => typeof message.text === "string" && message.text.trim()).map((message) => ({ ts: message.ts, text: message.text ?? "", permalink: slackPermalink(event.channelId!, message.ts) }));
+        const obviousNoise = messages.length === 0 || !messages.some((message) => /\b(decision|decided|task|todo|blocker|blocked|deadline|ship|release|issue|follow[- ]?up|owner)\b|https:\/\/github\.com\//i.test(message.text));
+        if (obviousNoise) classification = { meaningful: false, reason: "Deterministic filter found no action-bearing signal.", evidenceMessageTs: [] };
+        else classification = ObserverClassificationSchema.parse(await model.complete({ system: "You are Signal's passive observer classifier. Return only strict JSON. Never propose or authorize an action.", user: JSON.stringify({ task: "Separate meaningful workplace signal from noise.", messages, rules: ["Use only supplied messages.", "Meaningful means a decision, task, blocker, owner, deadline, release, or GitHub-linked question.", "Return at most five evidence message timestamps."] }), schemaName: "signal_observer_classification", schema: OBSERVER_CLASSIFICATION_JSON_SCHEMA }));
+        const allowed = new Set(messages.map((message) => message.ts));
+        const validEvidence = classification.evidenceMessageTs.filter((ts) => allowed.has(ts));
+        evidenceRefs = messages.filter((message) => validEvidence.includes(message.ts)).map((message) => ({ messageTs: message.ts, permalink: message.permalink }));
+      } else {
+        if (!event.repositoryOwner || !event.repositoryName || !event.pullRequestNumber) throw new AbortTaskRunError("GitHub observer coordinates are incomplete");
+        const installationId = await loadRepositoryInstallation(db, { tenantId: payload.tenantId, repositoryId: event.repositoryId ?? "" });
+        if (!installationId) throw new AbortTaskRunError("repository installation is unavailable");
+        const clients = await githubClients(installationId);
+        const pr = await clients.read.getIssue({ owner: event.repositoryOwner, repo: event.repositoryName, issueNumber: event.pullRequestNumber });
+        classification = ObserverClassificationSchema.parse(await model.complete({ system: "You are Signal's passive observer classifier. Return only strict JSON. Never propose or authorize an action.", user: JSON.stringify({ task: "Classify whether this pull-request event has meaningful signal for an executive summary.", pullRequest: { title: pr.title, url: pr.htmlUrl, eventType: event.eventType }, rules: ["Meaningful means a review, blocker, delivery risk, or material state change.", "Do not invent details."] }), schemaName: "signal_observer_classification", schema: OBSERVER_CLASSIFICATION_JSON_SCHEMA }));
+        evidenceRefs = [{ repositoryId: event.repositoryId, pullRequestNumber: event.pullRequestNumber, url: pr.htmlUrl }];
+      }
+      const state = classification.meaningful ? "SIGNAL" : "NOISE";
+      await recordObserverClassification(db, { tenantId: payload.tenantId, eventId: event.id, state, reason: classification.reason, evidenceRefs });
+      logger.info("Signal observer classification stored", { tenantId: payload.tenantId, eventId: event.id, state, evidenceCount: evidenceRefs.length });
+      return { status: state.toLowerCase() as "signal" | "noise", eventId: event.id };
     } finally { await pool.end(); }
   },
 });
@@ -96,17 +125,19 @@ export const analyzeThreadTask = schemaTask({
 export const executeOperationTask = schemaTask({
   id: "signal.execute-operation",
   schema: taskInput,
-  run: async (payload) => {
+  retry: { maxAttempts: 1 },
+  run: async (payload, { ctx }) => {
     const { db, pool } = createDb();
     try {
       const job = await loadOutboxJob(db, { tenantId: payload.tenantId, jobId: payload.jobId, taskId: "signal.execute-operation" });
       if (!job?.operationId) throw new AbortTaskRunError("execution job is unavailable");
+      if (!await recordOutboxExecutionOwner(db, { tenantId: payload.tenantId, jobId: payload.jobId, runId: ctx.run.id })) throw new AbortTaskRunError("execution owner binding is unavailable");
       const proposal = await loadApprovedProposalForExecution(db, { tenantId: payload.tenantId, operationId: job.operationId });
       if (!proposal) throw new AbortTaskRunError("approved operation is unavailable");
       const installationId = await loadRepositoryInstallation(db, { tenantId: payload.tenantId, repositoryId: proposal.mutation.repoId });
       if (!installationId) throw new AbortTaskRunError("repository installation is unavailable");
       const clients = await githubClients(installationId);
-      const result = await executeApprovedProposal({ tenantId: payload.tenantId, operationId: job.operationId, attemptId: payload.jobId }, {
+      const result = await executeApprovedProposal({ tenantId: payload.tenantId, operationId: job.operationId, attemptId: ctx.run.id }, {
         now: () => new Date(), loadApprovedProposal: async () => proposal,
         claimMutation: (input) => import("../db/repositories").then(({ claimMutation }) => claimMutation(db, input)),
         github: clients.write, githubRead: clients.read,
@@ -120,7 +151,7 @@ export const executeOperationTask = schemaTask({
 export const reconcileOperationTask = schemaTask({
   id: "signal.reconcile-operation",
   schema: taskInput,
-  retry: { maxAttempts: 3, minTimeoutInMs: 1_000, maxTimeoutInMs: 30_000, factor: 2, randomize: true },
+  retry: { maxAttempts: 3, minTimeoutInMs: 30_000, maxTimeoutInMs: 60_000, factor: 2, randomize: false },
   run: async (payload) => {
     const expectedAuthorLogin = requiredEnv("GITHUB_APP_LOGIN");
     const { db, pool } = createDb();
@@ -132,11 +163,23 @@ export const reconcileOperationTask = schemaTask({
       const installationId = await loadRepositoryInstallation(db, { tenantId: payload.tenantId, repositoryId: operation.mutation.repoId });
       if (!installationId) throw new AbortTaskRunError("repository installation is unavailable");
       const clients = await githubClients(installationId);
+      const signal = AbortSignal.timeout(30_000);
       const result = await reconcileUnknownOperation({ tenantId: payload.tenantId, operationId: job.operationId }, {
-        now: () => new Date(), loadOperation: async () => operation, isOwningAttemptTerminal: async () => true,
-        transitionSendingToUnknown: (input) => transitionSendingToUnknown(db, input), listIssues: (input) => clients.read.listIssues?.(input) ?? Promise.reject(new Error("issue reconciliation unavailable")), listComments: (input) => clients.read.listComments?.(input) ?? Promise.reject(new Error("comment reconciliation unavailable")),
+        now: () => new Date(), loadOperation: async () => operation,
+        isOwningAttemptTerminal: async (input) => {
+          const owner = await loadOwningExecutionRun(db, input);
+          return owner ? confirmTerminalTriggerRun({ ...owner, tenantId: input.tenantId }) : false;
+        },
+        getRepository: async (input) => {
+          const mapped = await loadMappedRepository(db, input);
+          if (!mapped) return null;
+          const actual = await clients.read.getRepository?.({ owner: input.owner, repo: input.repo, signal });
+          return actual?.id === mapped.id ? actual : null;
+        },
+        transitionSendingToUnknown: (input) => transitionSendingToUnknown(db, input), listIssues: (input) => clients.read.listIssues?.({ ...input, signal }) ?? Promise.reject(new Error("issue reconciliation unavailable")), listComments: (input) => clients.read.listComments?.({ ...input, signal }) ?? Promise.reject(new Error("comment reconciliation unavailable")),
         recordSuccess: (input) => recordReconciledResult(db, input), recordUnresolved: (input) => recordUnresolvedOperation(db, input),
       });
+      if (result.state === "UNKNOWN" && ["active_attempt", "unavailable"].includes(result.reason)) throw new Error("reconciliation_waiting_for_evidence");
       return { state: result.state, reason: result.state === "UNKNOWN" ? result.reason : "reconciled" };
     } finally { await pool.end(); }
   },
@@ -158,5 +201,14 @@ export const notifySlackTask = schemaTask({
   },
 });
 
-export const recoverTask = schedules.task({ id: "signal.recover", cron: { pattern: "* * * * *", timezone: "UTC" }, run: async () => ({ status: "scheduled" as const }) });
-export const cleanupTask = schedules.task({ id: "signal.cleanup", cron: { pattern: "0 * * * *", timezone: "UTC" }, run: async () => ({ status: "scheduled" as const }) });
+export const recoverTask = schedules.task({ id: "signal.recover", cron: { pattern: "* * * * *", timezone: "UTC" }, run: async () => {
+  const { db, pool } = createDb();
+  try {
+    return { status: "recovered" as const, ...(await recoverOutbox(db)) };
+  } finally { await pool.end(); }
+} });
+export const cleanupTask = schedules.task({ id: "signal.cleanup", cron: { pattern: "0 * * * *", timezone: "UTC" }, run: async () => {
+  const { db, pool } = createDb();
+  try { return { status: "cleaned" as const, ...(await cleanupRetention(db)) }; }
+  finally { await pool.end(); }
+} });

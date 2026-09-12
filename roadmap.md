@@ -28,7 +28,6 @@ Rob is the coordinator and integration owner. This track owns the dependency fou
 
 - I-01 — runtime and provider-access preflight (currently in progress)
 - I-02 — tenant-aware persistence and application contracts
-- I-04 — grounded analysis and immutable proposals
 - I-06 — reconciliation and result delivery
 - O-03 and O-05, only after the core gate and within their existing timeboxes
 - V-01 and the final integration/documentation lead for V-02
@@ -40,6 +39,7 @@ Rob also owns `tasks.md`, shared contracts, package manifests/lockfiles, depende
 Cesar works in a separate checkout and OpenAI account as the downstream Slack/GitHub interaction and inspector owner. This track begins each item only when its roadmap dependency is available:
 
 - I-03 — signed Slack observer ingestion and durable dispatch, after I-02 interfaces are frozen
+- I-04 — grounded analysis and immutable proposals, after I-02 and I-03 contracts are frozen (reassigned to Cesar by the user; Rob owns integration review)
 - I-05 — human approval and deterministic GitHub actions, after I-03 and I-04 interfaces are frozen
 - O-01 and O-02, only after the core gate and with Rob reviewing tenant/auth boundaries
 - O-04, only after the core gate and within its existing timebox

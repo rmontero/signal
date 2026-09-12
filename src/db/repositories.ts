@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { SignalDb } from "./client";
 import { isUniqueViolation } from "./errors";
 import { approvals, approvers, audit, channelMappings, identityMappings, inbox, observedEvents, operations, outbox, proposals, snapshots, slackReviews, tenants, threads } from "./schema";
-import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, MutationSchema, ObserverEventSchema, type Mutation, payloadHash, prepareMutation, type PersistedConversationRow } from "../domain/contracts";
+import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, MutationSchema, ObserverEventSchema, type Mutation, payloadHash, prepareMutation, type PersistedConversationRow, type PersistedObserverRow } from "../domain/contracts";
 import type { ApprovalProposal, ProposalReview } from "../services/approve";
 import type { UnknownOperation } from "../services/reconcile";
 import type { ObserverEventInput } from "../domain/observer-events";
@@ -58,12 +58,18 @@ export async function insertSnapshot(db: SignalDb, input: { tenantId: string; sn
   return id;
 }
 
-export async function createProposal(db: SignalDb, input: { tenantId: string; proposalId?: string; threadId: string; snapshotId: string; operationId?: string; version: number; mutation: Mutation; actionFingerprint: string; expiresAt: Date }): Promise<{ proposalId: string; operationId: string; payloadHash: string }> {
+type SignalTransaction = Parameters<Parameters<SignalDb["transaction"]>[0]>[0];
+type ProposalInput = { tenantId: string; proposalId?: string; threadId: string; snapshotId: string; operationId?: string; version: number; mutation: Mutation; actionFingerprint: string; expiresAt: Date };
+
+async function createProposalInTransaction(tx: SignalTransaction, input: ProposalInput, snapshot?: { content: unknown; snapshotHash: string; expiresAt: Date }): Promise<{ proposalId: string; operationId: string; payloadHash: string }> {
   const proposalId = input.proposalId ?? randomUUID();
   const operationId = input.operationId ?? randomUUID();
   const mutation = prepareMutation(input.mutation, operationId);
   const hash = payloadHash({ schemaVersion: 1, tenantId: input.tenantId, operationId, version: input.version, mutation });
-  return db.transaction(async (tx) => {
+  const existing = await tx.select({ proposalId: proposals.id, operationId: proposals.operationId, payloadHash: proposals.payloadHash }).from(proposals).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.actionFingerprint, input.actionFingerprint))).limit(1);
+  if (existing[0]) return existing[0];
+  if (snapshot) await tx.insert(snapshots).values({ tenantId: input.tenantId, id: input.snapshotId, threadId: input.threadId, content: snapshot.content, snapshotHash: snapshot.snapshotHash, expiresAt: snapshot.expiresAt });
+  {
     const active = await tx.select({ id: proposals.id, state: proposals.state }).from(proposals).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.threadId, input.threadId))).orderBy(desc(proposals.version)).limit(1);
     if (active[0]?.state === "APPROVED") throw new PersistenceConflict("Thread already has an approved proposal");
     if (active[0]?.state === "PENDING") await tx.update(proposals).set({ state: "SUPERSEDED" }).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, active[0].id)));
@@ -71,7 +77,11 @@ export async function createProposal(db: SignalDb, input: { tenantId: string; pr
     await tx.insert(operations).values({ tenantId: input.tenantId, id: operationId, proposalId });
     await tx.update(threads).set({ activeOperationId: operationId }).where(and(eq(threads.tenantId, input.tenantId), eq(threads.id, input.threadId)));
     return { proposalId, operationId, payloadHash: hash };
-  });
+  }
+}
+
+export async function createProposal(db: SignalDb, input: ProposalInput): Promise<{ proposalId: string; operationId: string; payloadHash: string }> {
+  return db.transaction((tx) => createProposalInTransaction(tx, input));
 }
 
 export async function acceptMention(db: SignalDb, rawInput: AcceptMention): Promise<{ inboxId: string; jobId: string; duplicate: boolean }> {
@@ -104,8 +114,39 @@ export async function loadInboxContext(db: SignalDb, input: { tenantId: string; 
 }
 
 export async function loadOutboxJob(db: SignalDb, input: { tenantId: string; jobId: string; taskId: string }): Promise<{ tenantId: string; jobId: string; taskId: string; inboxId: string | null; proposalId: string | null; operationId: string | null; observerEventId: string | null } | null> {
-  const rows = await db.select({ tenantId: outbox.tenantId, jobId: outbox.id, taskId: outbox.taskId, inboxId: outbox.inboxId, proposalId: outbox.proposalId, operationId: outbox.operationId, observerEventId: outbox.observerEventId }).from(outbox).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.taskId, input.taskId))).limit(1);
+  const rows = await db.select({ tenantId: outbox.tenantId, jobId: outbox.id, taskId: outbox.taskId, inboxId: outbox.inboxId, proposalId: outbox.proposalId, operationId: outbox.operationId, observerEventId: outbox.observerEventId }).from(outbox).innerJoin(tenants, and(eq(tenants.id, outbox.tenantId), eq(tenants.active, true))).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.taskId, input.taskId))).limit(1);
   return rows[0] ?? null;
+}
+
+export async function listPendingOutboxJobs(db: SignalDb, limit = 20): Promise<Array<{ tenantId: string; jobId: string; taskId: string }>> {
+  const rows = await db.select({ tenantId: outbox.tenantId, jobId: outbox.id, taskId: outbox.taskId }).from(outbox).innerJoin(tenants, and(eq(tenants.id, outbox.tenantId), eq(tenants.active, true))).where(sql`(${outbox.dispatchState} = 'PENDING' or (${outbox.dispatchState} = 'CLAIMED' and ${outbox.leaseExpiresAt} <= now()))`).orderBy(outbox.createdAt).limit(Math.min(Math.max(1, limit), 100));
+  return rows;
+}
+
+export async function claimOutboxDispatch(db: SignalDb, input: { tenantId: string; jobId: string; taskId: string }): Promise<{ tenantId: string; jobId: string; taskId: string; claimAttempt: number } | null> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx.select({ attempts: outbox.attempts }).from(outbox).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.taskId, input.taskId), sql`(${outbox.dispatchState} = 'PENDING' or (${outbox.dispatchState} = 'CLAIMED' and ${outbox.leaseExpiresAt} <= now()))`, sql`exists (select 1 from ${tenants} where ${tenants.id} = ${outbox.tenantId} and ${tenants.active} = true)`)).for("update", { skipLocked: true });
+    if (!job) return null;
+    const claimAttempt = job.attempts + 1;
+    await tx.update(outbox).set({ dispatchState: "CLAIMED", attempts: claimAttempt, leaseExpiresAt: sql`now() + interval '30 seconds'` }).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId)));
+    return { ...input, claimAttempt };
+  });
+}
+
+export async function releaseOutboxDispatch(db: SignalDb, input: { tenantId: string; jobId: string; claimAttempt: number }): Promise<boolean> {
+  const changed = await db.update(outbox).set({ dispatchState: "PENDING", leaseExpiresAt: null }).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.dispatchState, "CLAIMED"), eq(outbox.attempts, input.claimAttempt))).returning({ id: outbox.id });
+  return changed.length === 1;
+}
+
+export async function markOutboxDispatched(db: SignalDb, input: { tenantId: string; jobId: string; triggerRunId: string; claimAttempt: number }): Promise<boolean> {
+  const changed = await db.update(outbox).set({ dispatchState: "DISPATCHED", triggerRunId: input.triggerRunId, leaseExpiresAt: null }).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.dispatchState, "CLAIMED"), eq(outbox.attempts, input.claimAttempt), sql`(${outbox.triggerRunId} is null or ${outbox.triggerRunId} = ${input.triggerRunId})`)).returning({ id: outbox.id });
+  return changed.length === 1;
+}
+
+export async function cleanupRetention(db: SignalDb, now = new Date()): Promise<{ snapshots: number; proposals: number }> {
+  const snapshotRows = await db.update(snapshots).set({ content: { retained: false }, expiresAt: now }).where(sql`${snapshots.expiresAt} < ${now}`).returning({ id: snapshots.id });
+  const proposalRows = await db.update(proposals).set({ mutation: { redacted: true } }).where(sql`${proposals.createdAt} < ${new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)} and ${proposals.state} in ('DISMISSED','SUPERSEDED','EXPIRED')`).returning({ id: proposals.id });
+  return { snapshots: snapshotRows.length, proposals: proposalRows.length };
 }
 
 export async function loadObservedEvent(db: SignalDb, input: { tenantId: string; eventId: string }): Promise<{ tenantId: string; id: string; source: "slack" | "github"; eventType: string; channelId: string | null; threadTs: string | null; messageTs: string | null; repositoryId: string | null; repositoryOwner: string | null; repositoryName: string | null; installationId: string | null; pullRequestNumber: number | null } | null> {
@@ -113,6 +154,10 @@ export async function loadObservedEvent(db: SignalDb, input: { tenantId: string;
   const row = rows[0];
   if (!row || (row.source !== "slack" && row.source !== "github")) return null;
   return { ...row, source: row.source };
+}
+
+export async function recordObserverClassification(db: SignalDb, input: { tenantId: string; eventId: string; state: "SIGNAL" | "NOISE" | "BLOCKED"; reason: string; evidenceRefs: unknown }): Promise<void> {
+  await db.update(observedEvents).set({ classificationState: input.state, classificationReason: input.reason, evidenceRefs: input.evidenceRefs }).where(and(eq(observedEvents.tenantId, input.tenantId), eq(observedEvents.id, input.eventId)));
 }
 
 export async function loadApprovedProposalForExecution(db: SignalDb, input: { tenantId: string; operationId: string }): Promise<import("../services/execute").ApprovedProposal | null> {
@@ -134,10 +179,18 @@ export async function loadRepositoryInstallation(db: SignalDb, input: { tenantId
   return rows[0]?.installationId ?? null;
 }
 
+export async function loadMappedRepository(db: SignalDb, input: { tenantId: string; owner: string; repo: string }): Promise<{ id: string; owner: string; repo: string } | null> {
+  const rows = await db.select({ id: channelMappings.repositoryId, owner: channelMappings.repositoryOwner, repo: channelMappings.repositoryName })
+    .from(channelMappings)
+    .innerJoin(tenants, and(eq(tenants.id, channelMappings.tenantId), eq(tenants.active, true)))
+    .where(and(eq(channelMappings.tenantId, input.tenantId), eq(channelMappings.repositoryOwner, input.owner), eq(channelMappings.repositoryName, input.repo), eq(channelMappings.enabled, true)))
+    .limit(2);
+  return rows.length === 1 ? rows[0] : null;
+}
+
 export async function persistAnalyzedProposal(db: SignalDb, input: { tenantId: string; proposalId?: string; threadId: string; operationId?: string; version: number; mutation: Mutation; actionFingerprint: string; expiresAt: Date; snapshot: { content: unknown; snapshotHash: string; expiresAt: Date } }): Promise<{ proposalId: string; operationId: string; payloadHash: string }> {
   const snapshotId = randomUUID();
-  await insertSnapshot(db, { tenantId: input.tenantId, snapshotId, threadId: input.threadId, content: input.snapshot.content, snapshotHash: input.snapshot.snapshotHash, expiresAt: input.snapshot.expiresAt });
-  return createProposal(db, { ...input, snapshotId });
+  return db.transaction((tx) => createProposalInTransaction(tx, { ...input, snapshotId }, input.snapshot));
 }
 
 export async function setNotificationMessageTs(db: SignalDb, input: { tenantId: string; threadId: string; messageTs: string }): Promise<void> {
@@ -196,11 +249,23 @@ export async function claimMutation(db: SignalDb, input: { tenantId: string; ope
   return claimed[0] ?? null;
 }
 
-export async function recordSuccessfulResult(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; externalId: string; externalUrl?: string }): Promise<{ jobId: string } | null> {
+async function bindSuccessfulThread(tx: SignalTransaction, input: { tenantId: string; operationId: string; externalId: string; externalIssueNumber?: number }): Promise<void> {
+  const [proposal] = await tx.select({ threadId: proposals.threadId, mutation: proposals.mutation }).from(proposals).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.operationId, input.operationId)));
+  if (!proposal) throw new PersistenceConflict("Result proposal is unavailable");
+  const mutation = MutationSchema.parse(proposal.mutation);
+  const issueId = mutation.kind === "CREATE_ISSUE" ? input.externalId : mutation.issueId;
+  const issueNumber = mutation.kind === "CREATE_ISSUE" ? input.externalIssueNumber : mutation.issueNumber;
+  if (!issueNumber || !Number.isSafeInteger(issueNumber) || issueNumber < 1) throw new PersistenceConflict("Result issue number is unavailable");
+  const changed = await tx.update(threads).set({ linkedIssueId: issueId, linkedIssueNumber: issueNumber, activeOperationId: null }).where(and(eq(threads.tenantId, input.tenantId), eq(threads.id, proposal.threadId), eq(threads.activeOperationId, input.operationId))).returning({ id: threads.id });
+  if (!changed[0]) throw new PersistenceConflict("Thread result authority was lost");
+}
+
+export async function recordSuccessfulResult(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; externalId: string; externalUrl?: string; externalIssueNumber?: number }): Promise<{ jobId: string } | null> {
   const jobId = randomUUID();
   return db.transaction(async (tx) => {
     const changed = await tx.update(operations).set({ state: "SUCCEEDED", resultExternalId: input.externalId, resultExternalUrl: input.externalUrl, leaseExpiresAt: null }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "SENDING"), eq(operations.ownerAttemptId, input.attemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
     if (!changed[0]) return null;
+    await bindSuccessfulThread(tx, input);
     await tx.insert(outbox).values({ tenantId: input.tenantId, id: jobId, taskId: "signal.notify-slack", operationId: input.operationId });
     return { jobId };
   });
@@ -245,31 +310,37 @@ export async function dismissProposal(db: SignalDb, input: { tenantId: string; p
   });
 }
 
-async function updateOperationState(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; state: "FAILED" | "UNKNOWN"; errorCode: string }): Promise<void> {
-  const changed = await db.update(operations).set({ state: input.state, errorCode: input.errorCode, leaseExpiresAt: null }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "SENDING"), eq(operations.ownerAttemptId, input.attemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
-  if (!changed[0]) throw new PersistenceConflict("Operation fencing authority was lost");
-}
-
 export async function recordFailedResult(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; errorCode: string }): Promise<void> {
-  await updateOperationState(db, { ...input, state: "FAILED" });
+  await db.transaction(async (tx) => {
+    const changed = await tx.update(operations).set({ state: "FAILED", errorCode: input.errorCode, leaseExpiresAt: null }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "SENDING"), eq(operations.ownerAttemptId, input.attemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
+    if (!changed[0]) throw new PersistenceConflict("Operation fencing authority was lost");
+    await tx.update(threads).set({ activeOperationId: null }).where(and(eq(threads.tenantId, input.tenantId), eq(threads.activeOperationId, input.operationId)));
+    await tx.insert(outbox).values({ tenantId: input.tenantId, id: randomUUID(), taskId: "signal.notify-slack", operationId: input.operationId });
+  });
 }
 
 export async function recordUnknownResult(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; errorCode: string }): Promise<void> {
   const reconcileJobId = randomUUID();
   await db.transaction(async (tx) => {
-    const changed = await tx.update(operations).set({ state: "UNKNOWN", errorCode: input.errorCode, leaseExpiresAt: null }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "SENDING"), eq(operations.ownerAttemptId, input.attemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
+    const changed = await tx.update(operations).set({ state: "UNKNOWN", errorCode: input.errorCode }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "SENDING"), eq(operations.ownerAttemptId, input.attemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
     if (!changed[0]) throw new PersistenceConflict("Operation fencing authority was lost");
     await tx.insert(outbox).values({ tenantId: input.tenantId, id: reconcileJobId, taskId: "signal.reconcile-operation", operationId: input.operationId });
+    await tx.insert(outbox).values({ tenantId: input.tenantId, id: randomUUID(), taskId: "signal.notify-slack", operationId: input.operationId });
   });
 }
 
 export async function recordStaleResult(db: SignalDb, input: { tenantId: string; operationId: string; errorCode: string }): Promise<void> {
-  await db.update(operations).set({ state: "STALE", errorCode: input.errorCode }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "READY")));
+  await db.transaction(async (tx) => {
+    const changed = await tx.update(operations).set({ state: "STALE", errorCode: input.errorCode }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "READY"))).returning({ id: operations.id });
+    if (!changed[0]) return;
+    await tx.update(threads).set({ activeOperationId: null }).where(and(eq(threads.tenantId, input.tenantId), eq(threads.activeOperationId, input.operationId)));
+    await tx.insert(outbox).values({ tenantId: input.tenantId, id: randomUUID(), taskId: "signal.notify-slack", operationId: input.operationId });
+  });
 }
 
 export async function loadUnknownOperation(db: SignalDb, input: { tenantId: string; operationId: string; expectedAuthorLogin: string }): Promise<UnknownOperation | null> {
-  const rows = await db.select({ tenantId: operations.tenantId, operationId: operations.id, state: operations.state, leaseExpiresAt: operations.leaseExpiresAt, ownerAttemptId: operations.ownerAttemptId, mutation: proposals.mutation, payloadHash: proposals.payloadHash })
-    .from(operations).innerJoin(proposals, and(eq(proposals.tenantId, operations.tenantId), eq(proposals.id, operations.proposalId)))
+  const rows = await db.select({ tenantId: operations.tenantId, operationId: operations.id, state: operations.state, leaseExpiresAt: operations.leaseExpiresAt, ownerAttemptId: operations.ownerAttemptId, fencingToken: operations.fencingToken, version: proposals.version, mutation: proposals.mutation, payloadHash: proposals.payloadHash })
+    .from(operations).innerJoin(tenants, and(eq(tenants.id, operations.tenantId), eq(tenants.active, true))).innerJoin(proposals, and(eq(proposals.tenantId, operations.tenantId), eq(proposals.id, operations.proposalId)))
     .where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId))).limit(1);
   const row = rows[0];
   if (!row || !["READY", "SENDING", "SUCCEEDED", "FAILED", "UNKNOWN", "STALE"].includes(row.state)) return null;
@@ -278,23 +349,58 @@ export async function loadUnknownOperation(db: SignalDb, input: { tenantId: stri
   return { ...row, state: row.state as UnknownOperation["state"], mutation, expectedAuthorLogin: input.expectedAuthorLogin };
 }
 
-export async function transitionSendingToUnknown(db: SignalDb, input: { tenantId: string; operationId: string; ownerAttemptId: string; errorCode: string }): Promise<boolean> {
-  const changed = await db.update(operations).set({ state: "UNKNOWN", errorCode: input.errorCode, leaseExpiresAt: null }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.ownerAttemptId, input.ownerAttemptId), eq(operations.state, "SENDING"))).returning({ id: operations.id });
+export async function transitionSendingToUnknown(db: SignalDb, input: { tenantId: string; operationId: string; ownerAttemptId: string; fencingToken: number; errorCode: string }): Promise<boolean> {
+  const changed = await db.update(operations).set({ state: "UNKNOWN", errorCode: input.errorCode }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.ownerAttemptId, input.ownerAttemptId), eq(operations.fencingToken, input.fencingToken), sql`${operations.leaseExpiresAt} <= now()`, eq(operations.state, "SENDING"))).returning({ id: operations.id });
   return changed.length === 1;
 }
 
-export async function recordReconciledResult(db: SignalDb, input: { tenantId: string; operationId: string; externalId: string; externalUrl: string }): Promise<{ jobId: string } | null> {
+export async function recordReconciledResult(db: SignalDb, input: { tenantId: string; operationId: string; ownerAttemptId: string; fencingToken: number; externalId: string; externalUrl: string; externalIssueNumber?: number }): Promise<{ jobId: string } | null> {
   const jobId = randomUUID();
   return db.transaction(async (tx) => {
-    const changed = await tx.update(operations).set({ state: "SUCCEEDED", resultExternalId: input.externalId, resultExternalUrl: input.externalUrl, leaseExpiresAt: null, resolutionNote: "Reconciled from the verified GitHub marker." }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "UNKNOWN"))).returning({ id: operations.id });
+    const changed = await tx.update(operations).set({ state: "SUCCEEDED", resultExternalId: input.externalId, resultExternalUrl: input.externalUrl, leaseExpiresAt: null, resolutionNote: "Reconciled from the verified GitHub marker." }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "UNKNOWN"), eq(operations.ownerAttemptId, input.ownerAttemptId), eq(operations.fencingToken, input.fencingToken), sql`${operations.leaseExpiresAt} <= now()`)).returning({ id: operations.id });
     if (!changed[0]) return null;
+    await bindSuccessfulThread(tx, input);
     await tx.insert(outbox).values({ tenantId: input.tenantId, id: jobId, taskId: "signal.notify-slack", operationId: input.operationId });
     return { jobId };
   });
 }
 
-export async function recordUnresolvedOperation(db: SignalDb, input: { tenantId: string; operationId: string; errorCode: string; resolutionNote: string }): Promise<void> {
-  await db.update(operations).set({ state: "UNKNOWN", errorCode: input.errorCode, resolutionNote: input.resolutionNote }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "UNKNOWN")));
+export async function loadOwningExecutionRun(db: SignalDb, input: { tenantId: string; operationId: string; attemptId: string }): Promise<{ jobId: string; runId: string; taskId: string } | null> {
+  const rows = await db.select({ jobId: outbox.id, runId: outbox.triggerRunId, taskId: outbox.taskId }).from(outbox).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.operationId, input.operationId), eq(outbox.taskId, "signal.execute-operation"))).limit(2);
+  const row = rows[0];
+  if (rows.length !== 1 || !row) return null;
+  if (!row.runId || input.attemptId !== row.runId) return null;
+  return { ...row, runId: row.runId };
+}
+
+export async function recordOutboxExecutionOwner(db: SignalDb, input: { tenantId: string; jobId: string; runId: string }): Promise<boolean> {
+  const rows = await db.update(outbox).set({ triggerRunId: input.runId }).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.id, input.jobId), eq(outbox.taskId, "signal.execute-operation"), sql`(${outbox.triggerRunId} is null or ${outbox.triggerRunId} = ${input.runId})`)).returning({ id: outbox.id });
+  return rows.length === 1;
+}
+
+export async function listExpiredOperationsWithoutRecovery(db: SignalDb, limit = 20): Promise<Array<{ tenantId: string; operationId: string }>> {
+  return db.select({ tenantId: operations.tenantId, operationId: operations.id }).from(operations).innerJoin(tenants, and(eq(tenants.id, operations.tenantId), eq(tenants.active, true))).where(and(
+    sql`${operations.state} in ('SENDING','UNKNOWN')`, sql`${operations.leaseExpiresAt} <= now()`, sql`${operations.ownerAttemptId} is not null`,
+    sql`not exists (select 1 from ${outbox} where ${outbox.tenantId} = ${operations.tenantId} and ${outbox.operationId} = ${operations.id} and ${outbox.taskId} = 'signal.reconcile-operation')`,
+  )).orderBy(operations.createdAt).limit(Math.min(Math.max(1, limit), 100));
+}
+
+export async function enqueueExpiredOperationRecovery(db: SignalDb, input: { tenantId: string; operationId: string }): Promise<{ jobId: string } | null> {
+  return db.transaction(async (tx) => {
+    const rows = await tx.select({ id: operations.id }).from(operations).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), sql`${operations.state} in ('SENDING','UNKNOWN')`, sql`${operations.leaseExpiresAt} <= now()`, sql`${operations.ownerAttemptId} is not null`, sql`exists (select 1 from ${tenants} where ${tenants.id} = ${operations.tenantId} and ${tenants.active} = true)`)).for("update");
+    if (!rows[0]) return null;
+    const existing = await tx.select({ jobId: outbox.id }).from(outbox).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.operationId, input.operationId), eq(outbox.taskId, "signal.reconcile-operation"))).limit(1);
+    if (existing[0]) return existing[0];
+    const jobId = randomUUID();
+    await tx.insert(outbox).values({ tenantId: input.tenantId, id: jobId, taskId: "signal.reconcile-operation", operationId: input.operationId });
+    // This queues read-back work only. The task must confirm owner terminality before transition.
+    return { jobId };
+  });
+}
+
+export async function recordUnresolvedOperation(db: SignalDb, input: { tenantId: string; operationId: string; ownerAttemptId: string; fencingToken: number; errorCode: string; resolutionNote: string }): Promise<void> {
+  const changed = await db.update(operations).set({ errorCode: input.errorCode, resolutionNote: input.resolutionNote }).where(and(eq(operations.tenantId, input.tenantId), eq(operations.id, input.operationId), eq(operations.state, "UNKNOWN"), eq(operations.ownerAttemptId, input.ownerAttemptId), eq(operations.fencingToken, input.fencingToken))).returning({ id: operations.id });
+  if (!changed[0]) throw new PersistenceConflict("Reconciliation note authority was lost");
 }
 
 export async function appendAudit(db: SignalDb, input: { tenantId: string; actorSlackId?: string; entityType: string; entityId: string; fromState?: string; toState?: string; payloadHash?: string }): Promise<void> {
@@ -336,4 +442,32 @@ export async function listMonitoringConversations(db: SignalDb, tenantId: string
     }
   }
   return [...latestByThread.values()];
+}
+
+export async function listObservedConversations(db: SignalDb, tenantId: string, limit = 200): Promise<PersistedObserverRow[]> {
+  const rows = await db.select({
+    tenantId: observedEvents.tenantId,
+    eventId: observedEvents.id,
+    source: observedEvents.source,
+    eventType: observedEvents.eventType,
+    channelId: observedEvents.channelId,
+    threadTs: observedEvents.threadTs,
+    messageTs: observedEvents.messageTs,
+    repositoryId: observedEvents.repositoryId,
+    repositoryOwner: observedEvents.repositoryOwner,
+    repositoryName: observedEvents.repositoryName,
+    pullRequestNumber: observedEvents.pullRequestNumber,
+    classificationState: observedEvents.classificationState,
+    classificationReason: observedEvents.classificationReason,
+    createdAt: observedEvents.createdAt,
+  }).from(observedEvents).where(eq(observedEvents.tenantId, tenantId)).orderBy(desc(observedEvents.createdAt)).limit(limit);
+  const latest = new Map<string, PersistedObserverRow>();
+  for (const row of rows) {
+    if ((row.source !== "slack" && row.source !== "github") || !["PENDING", "SIGNAL", "NOISE", "BLOCKED"].includes(row.classificationState)) continue;
+    const key = row.source === "slack"
+      ? `${row.source}:${row.channelId ?? "unknown"}:${row.threadTs ?? row.messageTs ?? row.eventId}`
+      : `${row.source}:${row.repositoryId ?? `${row.repositoryOwner}/${row.repositoryName}`}:${row.pullRequestNumber ?? row.eventId}`;
+    if (!latest.has(key)) latest.set(key, row as PersistedObserverRow);
+  }
+  return [...latest.values()];
 }

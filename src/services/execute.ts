@@ -37,7 +37,7 @@ export interface ExecutionDependencies {
   claimMutation: (input: { tenantId: string; operationId: string; attemptId: string; leaseExpiresAt: Date }) => Promise<{ fencingToken: number } | null>;
   github: GitHubWriteClient;
   githubRead?: Pick<GitHubReadClient, "getIssue">;
-  recordSuccess: (input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; externalId: string; externalUrl?: string; actualAssignees?: string[] }) => Promise<{ jobId: string } | null>;
+  recordSuccess: (input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; externalId: string; externalUrl?: string; externalIssueNumber?: number; actualAssignees?: string[] }) => Promise<{ jobId: string } | null>;
   recordFailure: (input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; errorCode: string }) => Promise<void>;
   recordUnknown: (input: { tenantId: string; operationId: string; attemptId: string; fencingToken: number; errorCode: string }) => Promise<void>;
   recordStale: (input: { tenantId: string; operationId: string; errorCode: string }) => Promise<void>;
@@ -133,7 +133,7 @@ export async function executeApprovedProposal(
       returnedIssueNumber = mutation.issueNumber;
     }
     assertExternalIdentity(result.url, mutation, returnedIssueNumber);
-    const persisted = await dependencies.recordSuccess({ tenantId: input.tenantId, operationId: input.operationId, attemptId: input.attemptId, fencingToken: claim.fencingToken, externalId: result.id, externalUrl: result.url, actualAssignees });
+    const persisted = await dependencies.recordSuccess({ tenantId: input.tenantId, operationId: input.operationId, attemptId: input.attemptId, fencingToken: claim.fencingToken, externalId: result.id, externalUrl: result.url, externalIssueNumber: returnedIssueNumber, actualAssignees });
     if (!persisted) throw new ExecutionError("execution_persistence_failed", "successful mutation result lost its fencing authority");
     return { state: "SUCCEEDED", leaseExpiresAt, externalId: result.id, externalUrl: result.url, actualAssignees, jobId: persisted.jobId };
   } catch (error: unknown) {

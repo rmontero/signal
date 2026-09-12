@@ -1,7 +1,7 @@
 import { createDb } from "../db/client";
-import { listMonitoringConversations } from "../db/repositories";
+import { listMonitoringConversations, listObservedConversations } from "../db/repositories";
 import { getConnectorStatuses, type ConnectorEnvironment } from "./dashboard-settings";
-import { mapPersistedConversation, type MonitoringDashboardData } from "./monitoring";
+import { mapObservedConversation, mapPersistedConversation, type MonitoringDashboardData } from "./monitoring";
 
 export async function loadMonitoringDashboardData(): Promise<MonitoringDashboardData> {
   const connectors = getConnectorStatuses(process.env as ConnectorEnvironment);
@@ -26,11 +26,11 @@ export async function loadMonitoringDashboardData(): Promise<MonitoringDashboard
 
   const { db, pool } = createDb();
   try {
-    const rows = await listMonitoringConversations(db, tenantId);
+    const [rows, observedRows] = await Promise.all([listMonitoringConversations(db, tenantId), listObservedConversations(db, tenantId)]);
     return {
       mode: "LIVE",
-      notice: "Showing tenant-scoped records persisted in Neon. Observer ingestion and model classification are separate services.",
-      conversations: rows.map(mapPersistedConversation),
+      notice: "Showing tenant-scoped conversations and observer events persisted in Neon. Classification is read-only until a human acts.",
+      conversations: [...rows.map(mapPersistedConversation), ...observedRows.map(mapObservedConversation)],
       connectors,
     };
   } catch {

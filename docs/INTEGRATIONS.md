@@ -10,15 +10,15 @@ counts.
 
 | Tool | Useful role | Admission and timebox | Initial status |
 |---|---|---|---|
-| OpenAI | Selected model capability: `gpt-5.6-luna` | Core preflight through OpenRouter; 15 minutes | NOT RUN |
-| OpenRouter | One inference route to `openai/gpt-5.6-luna` | Core preflight; 15 minutes | NOT RUN |
-| Trigger.dev | Durable background analysis and dispatch tasks | Core preflight; 15 minutes | NOT RUN |
-| Vercel | Host the Next.js App Router web surface | Core deployment preflight; 15 minutes | PARTIAL |
-| Auth0 | Optional login for a tenant-scoped proposal inspector | 15 minutes, then defer | NOT RUN |
-| CopilotKit | Explain one selected persisted proposal and evidence | 15 minutes after Auth0, then defer | NOT RUN |
-| Exa | Search approved, sanitized public documentation | 15 minutes after core, then defer | NOT RUN |
-| Ambiguous AI | Read-only allowlisted runbook context in a demo workspace | 15 minutes, saved time only | NOT RUN |
-| Mozilla.ai | Offline evaluation of synthetic analysis output | 15 minutes, saved time only | NOT RUN |
+| OpenAI | Selected model capability: `gpt-5.6-luna` | Core preflight through OpenRouter; 15 minutes | PARTIAL — adapter is wired; live request NOT RUN |
+| OpenRouter | One inference route to `openai/gpt-5.6-luna` | Core preflight; 15 minutes | PARTIAL — strict adapter/tests PASS; live request NOT RUN |
+| Trigger.dev | Durable background analysis and dispatch tasks | Core preflight; 15 minutes | PARTIAL — tasks build/readiness PASS; production task run NOT RUN |
+| Vercel | Host the Next.js App Router web surface | Core deployment preflight; 15 minutes | PASS — production deployment READY; provider runtime gate pending |
+| Auth0 | Optional login for a tenant-scoped proposal inspector | 15 minutes, then defer | DEFERRED — no valid app/session configuration |
+| CopilotKit | Explain one selected persisted proposal and evidence | 15 minutes after Auth0, then defer | DEFERRED — no tenant-authorized inspector route |
+| Exa | Search approved, sanitized public documentation | 15 minutes after core, then defer | DEFERRED — no real key/consent path |
+| Ambiguous AI | Read-only allowlisted runbook context in a demo workspace | 15 minutes, saved time only | DEFERRED — no verified dataset retrieval |
+| Mozilla.ai | Offline evaluation of synthetic analysis output | 15 minutes, saved time only | DEFERRED — evaluation not run |
 
 ## Core services
 

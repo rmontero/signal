@@ -23,6 +23,23 @@ export type PersistedConversationRow = {
   operationCreatedAt: Date | null;
 };
 
+export type PersistedObserverRow = {
+  tenantId: string;
+  eventId: string;
+  source: "slack" | "github";
+  eventType: string;
+  channelId: string | null;
+  threadTs: string | null;
+  messageTs: string | null;
+  repositoryId: string | null;
+  repositoryOwner: string | null;
+  repositoryName: string | null;
+  pullRequestNumber: number | null;
+  classificationState: "PENDING" | "SIGNAL" | "NOISE" | "BLOCKED";
+  classificationReason: string | null;
+  createdAt: Date;
+};
+
 export const TaskInputSchema = z.object({ tenantId: id, jobId: id, schemaVersion: z.literal(1) }).strict();
 export type TaskInput = z.infer<typeof TaskInputSchema>;
 

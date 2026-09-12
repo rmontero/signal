@@ -111,3 +111,37 @@ test("rejects malformed provider identities and does not follow redirects", asyn
   );
   assert.equal(requestInit?.redirect, "error");
 });
+
+test("paginates bounded issue and comment reads for uncertain-write reconciliation", async () => {
+  const requests: string[] = [];
+  const client = createGitHubReadClient({
+    token: "ghs-read-token",
+    fetchImpl: async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("/comments")) return jsonResponse([{ id: 77, body: "marker", html_url: "https://github.com/acme/signal/issues/42#issuecomment-77", user: { login: "signal-app[bot]" } }]);
+      if (url.endsWith("/issues/42")) return jsonResponse({ id: 4200, number: 42, title: "Issue", body: "marker", html_url: "https://github.com/acme/signal/issues/42", state: "open" });
+      return jsonResponse([{ id: 42, number: 42, title: "Issue", body: "marker", html_url: "https://github.com/acme/signal/issues/42", state: "open", user: { login: "signal-app[bot]" } }]);
+    },
+  });
+  assert.deepEqual(await client.listIssues?.({ owner: "acme", repo: "signal" }), [{ id: "42", title: "Issue", body: "marker", url: "https://github.com/acme/signal/issues/42", issueNumber: 42, authorLogin: "signal-app[bot]" }]);
+  assert.deepEqual(await client.listComments?.({ owner: "acme", repo: "signal", issueNumber: 42 }), [{ id: "77", url: "https://github.com/acme/signal/issues/42#issuecomment-77", body: "marker", authorLogin: "signal-app[bot]", issueId: "4200", issueNumber: 42 }]);
+  assert.equal(requests.length, 3);
+});
+
+test("repository read returns a validated stable identity and rejects renamed coordinates", async () => {
+  const client = createGitHubReadClient({ token: "fixture-token", fetchImpl: async () => jsonResponse({ id: 123, name: "signal", owner: { login: "acme" } }) });
+  assert.deepEqual(await client.getRepository?.({ owner: "acme", repo: "signal" }), { id: "123", owner: "acme", repo: "signal" });
+  const changed = createGitHubReadClient({ token: "fixture-token", fetchImpl: async () => jsonResponse({ id: 123, name: "renamed", owner: { login: "acme" } }) });
+  await assert.rejects(changed.getRepository!({ owner: "acme", repo: "signal" }), GitHubReadError);
+});
+
+test("comment read rejects a different parent URL or comment anchor", async () => {
+  for (const url of ["https://github.com/acme/signal/issues/43#issuecomment-77", "https://github.com/acme/signal/issues/42#issuecomment-78"]) {
+    const client = createGitHubReadClient({ token: "fixture-token", fetchImpl: async (input) => String(input).includes("/comments")
+      ? jsonResponse([{ id: 77, body: "marker", html_url: url, user: { login: "signal-app[bot]" } }])
+      : jsonResponse({ id: 4200, number: 42, title: "Issue", html_url: "https://github.com/acme/signal/issues/42", state: "open" }),
+    });
+    await assert.rejects(client.listComments!({ owner: "acme", repo: "signal", issueNumber: 42 }), GitHubReadError);
+  }
+});

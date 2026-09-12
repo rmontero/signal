@@ -4,7 +4,7 @@ import { createDb } from "../../../../db/client";
 import { approveProposal, dismissProposal, isNamedApprover, loadProposalForApproval, loadSlackReview, recordSlackReview, resolveActiveSlackTenant } from "../../../../db/repositories";
 import { handleSlackInteraction } from "../../../../services/slack-interactions";
 import { dismissProposal as dismissProposalService, prepareProposalReview, recordProposalReview, submitProposalApproval } from "../../../../services/approve";
-import { dispatchOutboxJob } from "../../../../trigger/dispatch";
+import { dispatchStoredOutboxJob } from "../../../../trigger/outbox";
 
 export const runtime = "nodejs";
 
@@ -61,7 +61,7 @@ export async function POST(request: Request): Promise<Response> {
         approve: (binding) => approveProposal(db, binding),
         dismiss: (dismissInput) => dismissProposal(db, dismissInput),
         });
-        try { await dispatchOutboxJob({ tenantId: input.tenantId, jobId: result.jobId, taskId: "signal.execute-operation", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
+        try { await dispatchStoredOutboxJob(db, { tenantId: input.tenantId, jobId: result.jobId, taskId: "signal.execute-operation", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
         return result;
       },
     });

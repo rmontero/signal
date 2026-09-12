@@ -292,7 +292,7 @@ function OverviewView({
         <div className="metric-card metric-card-primary"><span className="metric-label">Open conversations</span><strong>{metrics.open}</strong><span className="metric-foot">From persisted tenant records</span><span className="metric-watermark">◌</span></div>
         <div className="metric-card"><span className="metric-label">Needs your call</span><strong>{metrics.needsHuman}</strong><span className="metric-foot">Human input has leverage</span><span className="metric-spark">▁▃▂▅▃▆</span></div>
         <div className="metric-card"><span className="metric-label">Signal sources</span><strong>{metrics.slack + metrics.github}</strong><span className="metric-foot"><span className="source-mini source-mini-slack">S</span> Slack <span className="source-mini source-mini-github">⌘</span> GitHub PRs</span></div>
-        <div className="metric-card"><span className="metric-label">Noise filtered</span><strong>—</strong><span className="metric-foot">Available after observer classification</span><span className="noise-ring noise-ring-empty">—</span></div>
+        <div className="metric-card"><span className="metric-label">Noise filtered</span><strong>{metrics.noiseFiltered}</strong><span className="metric-foot">Observer events filtered from the queue</span><span className="noise-ring noise-ring-empty">·</span></div>
       </section>
 
       <section className="attention-card">

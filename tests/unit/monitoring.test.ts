@@ -5,6 +5,7 @@ import {
   filterConversations,
   getMonitoringMetrics,
   mapPersistedConversation,
+  mapObservedConversation,
   type MonitoredConversation,
   type PersistedConversationRow,
 } from "../../src/lib/monitoring.ts";
@@ -63,6 +64,7 @@ test("computes open, attention, source, and signal metrics", () => {
     needsHuman: 1,
     slack: 1,
     github: 1,
+    noiseFiltered: 0,
   });
 });
 
@@ -107,4 +109,27 @@ test("maps a persisted tenant-scoped proposal into a real dashboard conversation
     tags: ["proposal", "approval"],
     signals: ["Proposal version 1 is persisted for review."],
   });
+});
+
+test("maps a classified observer event without exposing source payload", () => {
+  const conversation = mapObservedConversation({
+    tenantId: "tenant-1",
+    eventId: "event-1",
+    source: "github",
+    eventType: "pull_request",
+    channelId: null,
+    threadTs: null,
+    messageTs: null,
+    repositoryId: "repo-1",
+    repositoryOwner: "rmontero",
+    repositoryName: "signal",
+    pullRequestNumber: 42,
+    classificationState: "SIGNAL",
+    classificationReason: "Review risk needs a human decision.",
+    createdAt: new Date("2026-09-12T16:00:00.000Z"),
+  });
+  assert.equal(conversation.source, "github");
+  assert.equal(conversation.status, "needs-human");
+  assert.equal(conversation.evidence[0]?.href, "https://github.com/rmontero/signal/pull/42");
+  assert.equal(JSON.stringify(conversation).includes("source payload"), false);
 });

@@ -1,6 +1,6 @@
 {
-  "id": "634c06c2-3a9e-4114-b041-abf993dbe417",
-  "prevId": "349d5687-5b47-46b4-b571-a4324148e19d",
+  "id": "f518bd4b-e909-4113-9c38-bca51e2ab7d6",
+  "prevId": "634c06c2-3a9e-4114-b041-abf993dbe417",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -669,6 +669,25 @@
           "primaryKey": false,
           "notNull": true
         },
+        "classification_state": {
+          "name": "classification_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "classification_reason": {
+          "name": "classification_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_refs": {
+          "name": "evidence_refs",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -718,6 +737,10 @@
         "observed_events_source_check": {
           "name": "observed_events_source_check",
           "value": "\"observed_events\".\"source\" in ('slack','github')"
+        },
+        "observed_events_classification_check": {
+          "name": "observed_events_classification_check",
+          "value": "\"observed_events\".\"classification_state\" in ('PENDING','SIGNAL','NOISE','BLOCKED')"
         }
       },
       "isRLSEnabled": false

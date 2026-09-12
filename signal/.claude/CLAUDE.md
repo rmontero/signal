@@ -1,1 +1,3 @@
+# Claude configuration
+
 @../AGENTS.md

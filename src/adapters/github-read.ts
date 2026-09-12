@@ -36,6 +36,7 @@ export interface GitHubReconciliationRecord {
 }
 
 export interface GitHubReadClient {
+  getRepository?: (input: { owner: string; repo: string; signal?: AbortSignal }) => Promise<{ id: string; owner: string; repo: string }>;
   search(input: {
     owner: string;
     repo: string;
@@ -61,7 +62,7 @@ export interface GitHubReadClientOptions {
 }
 
 const OWNER_OR_REPO = /^[A-Za-z0-9_.-]+$/;
-const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
 const DEFAULT_RETRIES = 2;
 const MAX_CANDIDATES = 5;
 const MAX_RECONCILIATION_PAGES = 10;
@@ -150,16 +151,18 @@ function parseReconciliationIssue(value: unknown, owner: string, repo: string): 
   };
 }
 
-function parseReconciliationComment(value: unknown, owner: string, repo: string, issueNumber: number): GitHubReconciliationRecord {
+function parseReconciliationComment(value: unknown, owner: string, repo: string, issueNumber: number, issueId: string): GitHubReconciliationRecord {
   if (typeof value !== "object" || value === null) throw new GitHubReadError("github_read_invalid", "GitHub returned an invalid comment");
   const item = value as Record<string, unknown>;
   if (typeof item.body !== "string" || !item.body) throw new GitHubReadError("github_read_invalid", "GitHub returned an invalid comment body");
   const htmlUrl = parseHttpUrl(item.html_url, owner, repo);
+  const id = parseNumericId(item.id);
+  if (htmlUrl !== `https://github.com/${owner}/${repo}/issues/${issueNumber}#issuecomment-${id}`) throw new GitHubReadError("github_read_invalid", "GitHub returned a mismatched comment target");
   const user = item.user;
   const authorLogin = typeof user === "object" && user !== null && LOGIN.test(String((user as Record<string, unknown>).login ?? ""))
     ? String((user as Record<string, unknown>).login)
     : null;
-  return { id: parseNumericId(item.id), url: htmlUrl, body: item.body, authorLogin, issueNumber };
+  return { id, url: htmlUrl, body: item.body, authorLogin, issueNumber, issueId };
 }
 
 function buildUrl(baseUrl: string, path: string, query?: Record<string, string>): string {
@@ -219,6 +222,15 @@ export function createGitHubReadClient(options: GitHubReadClientOptions): GitHub
   }
 
   return {
+    async getRepository(input) {
+      assertRepository(input.owner, input.repo);
+      const payload = await readJson(`repos/${input.owner}/${input.repo}`, input.signal);
+      if (typeof payload !== "object" || payload === null) throw new GitHubReadError("github_read_invalid", "GitHub returned an invalid repository");
+      const repository = payload as Record<string, unknown>;
+      const owner = repository.owner as { login?: unknown } | null;
+      if (repository.name !== input.repo || owner?.login !== input.owner) throw new GitHubReadError("github_read_invalid", "GitHub repository coordinates changed");
+      return { id: parseNumericId(repository.id), owner: input.owner, repo: input.repo };
+    },
     async search(input) {
       assertRepository(input.owner, input.repo);
       if (!Array.isArray(input.queries) || input.queries.length < 1 || input.queries.length > 2 || input.queries.some((query) => typeof query !== "string" || !query.trim() || query.length > 200)) {
@@ -269,11 +281,13 @@ export function createGitHubReadClient(options: GitHubReadClientOptions): GitHub
     async listComments(input) {
       assertRepository(input.owner, input.repo);
       assertIssueNumber(input.issueNumber);
+      const parent = parseCandidate(await readJson(`repos/${input.owner}/${input.repo}/issues/${input.issueNumber}`, input.signal), input.owner, input.repo);
+      if (parent.number !== input.issueNumber || parent.isPullRequest || parent.htmlUrl !== `https://github.com/${input.owner}/${input.repo}/issues/${input.issueNumber}`) throw new GitHubReadError("github_read_invalid", "GitHub returned a mismatched parent issue");
       const records: GitHubReconciliationRecord[] = [];
       for (let page = 1; page <= MAX_RECONCILIATION_PAGES; page += 1) {
         const payload = await readJson(`repos/${input.owner}/${input.repo}/issues/${input.issueNumber}/comments`, input.signal, { per_page: "100", page: String(page) });
         if (!Array.isArray(payload)) throw new GitHubReadError("github_read_invalid", "GitHub returned an invalid comment list");
-        records.push(...payload.map((item) => parseReconciliationComment(item, input.owner, input.repo, input.issueNumber)));
+        records.push(...payload.map((item) => parseReconciliationComment(item, input.owner, input.repo, input.issueNumber, parent.id)));
         if (payload.length < 100) return records;
       }
       throw new GitHubReadError("github_read_unavailable", "GitHub comment reconciliation exceeded the page bound");

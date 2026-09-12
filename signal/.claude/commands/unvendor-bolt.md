@@ -1,3 +1,5 @@
+# Unvendor Bolt
+
 Switch from the vendored bolt-js tarball to the latest published `@slack/bolt` package on npm.
 
 ## Steps
@@ -30,3 +32,4 @@ Switch from the vendored bolt-js tarball to the latest published `@slack/bolt` p
    ```
 
 7. Report the version change to the user. Do NOT commit — let the user review first.
+ # Unvendor Bolt

@@ -1,3 +1,5 @@
+# Vendor Bolt
+
 Update the vendored bolt-js tarball to the latest commit on the `main` branch.
 
 ## Steps
@@ -32,3 +34,4 @@ Update the vendored bolt-js tarball to the latest commit on the `main` branch.
    ```
 
 7. Report the old version vs new version to the user. Do NOT commit — let the user review first.
+ # Vendor Bolt

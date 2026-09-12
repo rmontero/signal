@@ -1,7 +1,8 @@
-import type { PersistedConversationRow } from "../domain/contracts";
+import type { PersistedConversationRow, PersistedObserverRow } from "../domain/contracts";
 import type { ConnectorSummary } from "./dashboard-settings";
 
 export type { PersistedConversationRow } from "../domain/contracts";
+export type { PersistedObserverRow } from "../domain/contracts";
 
 export type ConversationSource = "slack" | "github";
 export type ConversationStatus = "needs-human" | "monitoring" | "resolved";
@@ -49,6 +50,7 @@ export type MonitoringMetrics = {
   needsHuman: number;
   slack: number;
   github: number;
+  noiseFiltered: number;
 };
 
 export type MonitoringDashboardData = {
@@ -120,6 +122,52 @@ export function mapPersistedConversation(row: PersistedConversationRow): Monitor
   };
 }
 
+function observerIdentity(row: PersistedObserverRow): string {
+  return row.source === "slack"
+    ? `${row.channelId ?? "unknown"}:${row.threadTs ?? row.messageTs ?? row.eventId}`
+    : `${row.repositoryId ?? `${row.repositoryOwner}/${row.repositoryName}`}:${row.pullRequestNumber ?? row.eventId}`;
+}
+
+export function mapObservedConversation(row: PersistedObserverRow): MonitoredConversation {
+  const isNoise = row.classificationState === "NOISE";
+  const isSignal = row.classificationState === "SIGNAL";
+  const source = row.source;
+  const repo = row.repositoryOwner && row.repositoryName ? `${row.repositoryOwner}/${row.repositoryName}` : "Mapped workspace";
+  const location = source === "slack" ? `#${row.channelId ?? "unknown"}` : `${repo} · PR #${row.pullRequestNumber ?? "?"}`;
+  const title = source === "slack" ? `Slack conversation in ${location}` : `Pull request #${row.pullRequestNumber ?? "?"} · ${repo}`;
+  const evidenceHref = source === "github" && row.repositoryOwner && row.repositoryName && row.pullRequestNumber
+    ? `https://github.com/${row.repositoryOwner}/${row.repositoryName}/pull/${row.pullRequestNumber}`
+    : source === "slack" && row.channelId && row.messageTs
+      ? `https://slack.com/archives/${row.channelId}/p${row.messageTs.replace(".", "")}`
+      : null;
+  const summary = isNoise
+    ? "Deterministic or model filtering found no signal requiring human attention."
+    : isSignal
+      ? row.classificationReason ?? "Meaningful signal was detected and is ready for executive review."
+      : row.classificationState === "BLOCKED"
+        ? "Observer classification is blocked until the configured provider state is available."
+        : "Verified observer event is queued for passive classification.";
+  return {
+    id: `observer:${row.tenantId}:${observerIdentity(row)}`,
+    source,
+    status: isNoise ? "resolved" : isSignal ? "needs-human" : "monitoring",
+    priority: isSignal ? "high" : isNoise ? "low" : "medium",
+    title,
+    summary,
+    workspace: repo,
+    location,
+    participants: [source === "slack" ? "Slack observer" : "GitHub observer"],
+    lastActivity: formatPersistedDate(row.createdAt),
+    activityTimestamp: row.createdAt.toISOString(),
+    signalLabel: isNoise ? "Noise filtered" : isSignal ? "Meaningful signal" : row.classificationState === "BLOCKED" ? "Classification blocked" : "Queued observer event",
+    decisionQuestion: isSignal ? "Does this signal require a human decision or follow-up?" : null,
+    evidence: [{ source, label: source === "slack" ? "Slack event" : "GitHub pull request", detail: row.eventType, href: evidenceHref }],
+    activity: [{ source, label: isNoise ? "Noise filtered" : isSignal ? "Signal classified" : "Observer event received", detail: summary, timestamp: formatPersistedDate(row.createdAt) }],
+    tags: ["observer", row.classificationState.toLowerCase()],
+    signals: [summary],
+  };
+}
+
 export function filterConversations(
   conversations: MonitoredConversation[],
   filter: ConversationFilter | SourceFilter,
@@ -156,8 +204,9 @@ export function getMonitoringMetrics(conversations: MonitoredConversation[]): Mo
       if (conversation.status === "needs-human") metrics.needsHuman += 1;
       if (conversation.source === "slack") metrics.slack += 1;
       if (conversation.source === "github") metrics.github += 1;
+      if (conversation.signalLabel === "Noise filtered") metrics.noiseFiltered += 1;
       return metrics;
     },
-    { open: 0, needsHuman: 0, slack: 0, github: 0 },
+    { open: 0, needsHuman: 0, slack: 0, github: 0, noiseFiltered: 0 },
   );
 }
