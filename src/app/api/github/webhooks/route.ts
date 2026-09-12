@@ -2,6 +2,7 @@ import { classifyGitHubPullRequestWebhook, verifyGitHubWebhookSignature } from "
 import { createDb } from "../../../../db/client";
 import { acceptObserverEvent, resolveGitHubObserverTenant } from "../../../../db/repositories";
 import { createObserverEventInput } from "../../../../domain/observer-events";
+import { dispatchOutboxJob } from "../../../../trigger/dispatch";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,7 @@ export async function POST(request: Request): Promise<Response> {
       rawBody,
     });
     const accepted = await acceptObserverEvent(db, input);
+    try { await dispatchOutboxJob({ tenantId, jobId: accepted.jobId, taskId: "signal.observe-event", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
     return json({ ok: true, duplicate: accepted.duplicate });
   } catch {
     return json({ error: "Observer unavailable" }, 503);

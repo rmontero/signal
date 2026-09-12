@@ -1,15 +1,7 @@
 import type { Mutation, OperationState } from "../domain/contracts";
 import type { GitHubReconciliationRecord } from "../adapters/github-read";
 
-export type ReconciliationRecord = {
-  id: string;
-  url: string;
-  body: string;
-  authorLogin: string | null;
-  issueNumber?: number;
-  issueId?: string;
-  title?: string;
-};
+export type ReconciliationRecord = GitHubReconciliationRecord;
 
 export type UnknownOperation = {
   tenantId: string;
@@ -31,8 +23,8 @@ export interface ReconciliationDependencies {
   loadOperation: (input: { tenantId: string; operationId: string }) => Promise<UnknownOperation | null>;
   isOwningAttemptTerminal: (input: { tenantId: string; operationId: string; attemptId: string }) => Promise<boolean>;
   transitionSendingToUnknown: (input: { tenantId: string; operationId: string; ownerAttemptId: string; errorCode: string }) => Promise<boolean>;
-  listIssues: (input: { owner: string; repo: string }) => Promise<ReconciliationRecord[] | GitHubReconciliationRecord[]>;
-  listComments: (input: { owner: string; repo: string; issueNumber: number }) => Promise<ReconciliationRecord[] | GitHubReconciliationRecord[]>;
+  listIssues: (input: { owner: string; repo: string }) => Promise<ReconciliationRecord[]>;
+  listComments: (input: { owner: string; repo: string; issueNumber: number }) => Promise<ReconciliationRecord[]>;
   recordSuccess: (input: { tenantId: string; operationId: string; externalId: string; externalUrl: string }) => Promise<{ jobId: string } | null>;
   recordUnresolved: (input: { tenantId: string; operationId: string; errorCode: string; resolutionNote: string }) => Promise<void>;
 }
@@ -84,12 +76,13 @@ export async function reconcileUnknownOperation(
 
   let matches: ReconciliationRecord[];
   try {
-    if (operation.mutation.kind === "CREATE_ISSUE") {
-      const records = await dependencies.listIssues({ owner: operation.mutation.owner, repo: operation.mutation.repo });
-      matches = records.filter((record) => exactIssueMatch(record, operation.mutation, operation.operationId, operation.expectedAuthorLogin));
+    const mutation = operation.mutation;
+    if (mutation.kind === "CREATE_ISSUE") {
+      const records = await dependencies.listIssues({ owner: mutation.owner, repo: mutation.repo });
+      matches = records.filter((record) => exactIssueMatch(record, mutation, operation.operationId, operation.expectedAuthorLogin));
     } else {
-      const records = await dependencies.listComments({ owner: operation.mutation.owner, repo: operation.mutation.repo, issueNumber: operation.mutation.issueNumber });
-      matches = records.filter((record) => exactCommentMatch(record, operation.mutation, operation.operationId, operation.expectedAuthorLogin));
+      const records = await dependencies.listComments({ owner: mutation.owner, repo: mutation.repo, issueNumber: mutation.issueNumber });
+      matches = records.filter((record) => exactCommentMatch(record, mutation, operation.operationId, operation.expectedAuthorLogin));
     }
   } catch {
     await dependencies.recordUnresolved({ tenantId: input.tenantId, operationId: input.operationId, errorCode: "reconcile_read_failed", resolutionNote: "Provider read-back was incomplete or unavailable; absence is not evidence of non-creation." });

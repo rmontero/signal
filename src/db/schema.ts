@@ -29,7 +29,7 @@ export const identityMappings = pgTable("identity_mappings", {
 
 export const threads = pgTable("threads", {
   tenantId: text("tenant_id").notNull(), id: id(), channelId: text("channel_id").notNull(), threadTs: text("thread_ts").notNull(),
-  linkedIssueId: text("linked_issue_id"), linkedIssueNumber: integer("linked_issue_number"), activeOperationId: text("active_operation_id"), createdAt: createdAt(),
+  linkedIssueId: text("linked_issue_id"), linkedIssueNumber: integer("linked_issue_number"), activeOperationId: text("active_operation_id"), notificationMessageTs: text("notification_message_ts"), createdAt: createdAt(),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), unique("threads_coordinate_unique").on(table.tenantId, table.channelId, table.threadTs),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "threads_tenant_fk" }),
@@ -81,6 +81,13 @@ export const approvals = pgTable("approvals", {
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "approvals_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "approvals_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId, table.proposalId], foreignColumns: [operations.tenantId, operations.id, operations.proposalId], name: "approvals_operation_fk" }),
 ]);
 
+export const slackReviews = pgTable("slack_reviews", {
+  tenantId: text("tenant_id").notNull(), proposalId: text("proposal_id").notNull(), modalId: text("modal_id").notNull(), actorSlackId: text("actor_slack_id").notNull(), slackTeamId: text("slack_team_id").notNull(), channelId: text("channel_id").notNull(), version: integer("version").notNull(), createdAt: createdAt(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.proposalId, table.modalId] }),
+  foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "slack_reviews_proposal_fk" }),
+]);
+
 export const observedEvents = pgTable("observed_events", {
   tenantId: text("tenant_id").notNull(), id: id(), source: text("source").notNull(), providerEventId: text("provider_event_id").notNull(), eventType: text("event_type").notNull(),
   channelId: text("channel_id"), threadTs: text("thread_ts"), messageTs: text("message_ts"), actorId: text("actor_id"),
@@ -103,4 +110,4 @@ export const audit = pgTable("audit", {
   tenantId: text("tenant_id").notNull(), id: id(), actorSlackId: text("actor_slack_id"), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), fromState: text("from_state"), toState: text("to_state"), payloadHash: text("payload_hash"), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.tenantId, table.id] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "audit_tenant_fk" })]);
 
-export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, observedEvents, outbox, audit };
+export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, slackReviews, observedEvents, outbox, audit };

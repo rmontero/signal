@@ -22,7 +22,7 @@ An agent may begin autonomous coding only after the configuration below is popul
 | `TRIGGER_SECRET_KEY` | Development task/API secret from Trigger.dev; verify the task runtime can authenticate without printing it |
 | `SLACK_SIGNING_SECRET` | Talacha.dev Slack app signing secret; verify raw-body signature rejection and acceptance |
 | `SLACK_BOT_TOKEN` | Talacha.dev installation token with only the documented app scopes; verify identity and permitted channel metadata |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | GitHub App credentials for selected repositories; verify installation/repository reads and granted Issues write/Pull requests read permissions |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_LOGIN` | GitHub App credentials and bot login for selected repositories; verify installation/repository reads and granted Issues write/Pull requests read permissions |
 | `OPENROUTER_API_KEY` | OpenRouter credential; verify one bounded structured response using the exact model below |
 | `OPENROUTER_MODEL` | Exactly `openai/gpt-5.6-luna`; reject silent fallback or a direct OpenAI route |
 | `CRON_SECRET` | High-entropy secret for the protected maintenance endpoint; verify missing/wrong bearer is rejected |
@@ -81,7 +81,7 @@ The readiness result belongs in `tasks.md` with `PASS`, `PARTIAL`, `FAIL` or `NO
 | `SLACK_BOT_TOKEN` | Installed workspace bot; Vercel modal calls and Trigger reads/notifications |
 | `SLACK_THREAD_READ_TOKEN` | Optional separately authorized thread-reader token; Trigger only; no automatic fallback |
 | `GITHUB_WEBHOOK_SECRET` | Raw-body verification for the selected repository webhook; Vercel only |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | Mint short-lived installation tokens; Trigger only |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_LOGIN` | Mint short-lived installation tokens and verify the expected bot author; Trigger only |
 | `OPENROUTER_API_KEY` | Single model provider credential; Trigger only |
 | `OPENROUTER_MODEL` | Exactly `openai/gpt-5.6-luna` initially; no silent model fallback |
 | `CRON_SECRET` | Protected recovery/cleanup endpoint bearer; Vercel and authorized operator |

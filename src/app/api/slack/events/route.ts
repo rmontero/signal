@@ -1,7 +1,8 @@
-import { classifySlackObserverEnvelope, verifySlackRequestSignature } from "../../../../adapters/slack-standalone.mts";
-import { acceptObserverEvent, resolveSlackObserverTenant } from "../../../../db/repositories";
+import { classifySlackEnvelope, classifySlackObserverEnvelope, verifySlackRequestSignature } from "../../../../adapters/slack-standalone.mts";
+import { acceptMention, acceptObserverEvent, resolveSlackObserverTenant } from "../../../../db/repositories";
 import { createDb } from "../../../../db/client";
 import { createObserverEventInput } from "../../../../domain/observer-events";
+import { dispatchOutboxJob } from "../../../../trigger/dispatch";
 
 export const runtime = "nodejs";
 
@@ -28,8 +29,21 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "Invalid request" }, 400);
   }
 
-  if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
-    return json({ challenge: envelope.challenge });
+  const mention = classifySlackEnvelope(envelope);
+  if (mention.kind === "challenge") return json({ challenge: mention.challenge });
+  if (mention.kind === "app_mention") {
+    const { db, pool } = createDb();
+    try {
+      const tenantId = await resolveSlackObserverTenant(db, { slackTeamId: mention.teamId, channelId: mention.channelId });
+      if (!tenantId) return json({ ok: true }, 202);
+      const accepted = await acceptMention(db, { tenantId, slackEventId: mention.eventId, slackTeamId: mention.teamId, channelId: mention.channelId, threadTs: mention.threadTs, messageTs: mention.messageTs, actorSlackId: mention.userId });
+      try { await dispatchOutboxJob({ tenantId, jobId: accepted.jobId, taskId: "signal.analyze-thread", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
+      return json({ ok: true, duplicate: accepted.duplicate });
+    } catch {
+      return json({ error: "Observer unavailable" }, 503);
+    } finally {
+      await pool.end();
+    }
   }
 
   const classification = classifySlackObserverEnvelope(envelope);
@@ -55,6 +69,7 @@ export async function POST(request: Request): Promise<Response> {
       rawBody,
     });
     const accepted = await acceptObserverEvent(db, input);
+    try { await dispatchOutboxJob({ tenantId, jobId: accepted.jobId, taskId: "signal.observe-event", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
     return json({ ok: true, duplicate: accepted.duplicate });
   } catch {
     return json({ error: "Observer unavailable" }, 503);
