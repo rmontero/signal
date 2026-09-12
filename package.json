@@ -1,0 +1,28 @@
+{
+  "name": "signal",
+  "version": "1.0.0",
+  "description": "Turn conversation into action.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "trigger:dev": "trigger.dev dev --profile default"
+  },
+  "repository": {
+    "type": "git",
+    "url": "gh-talacha:rmontero/signal.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@trigger.dev/sdk": "^4.5.16"
+  },
+  "devDependencies": {
+    "@trigger.dev/build": "^4.5.16",
+    "typescript": "^7.0.2"
+  }
+}
