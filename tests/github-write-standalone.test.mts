@@ -119,7 +119,33 @@ test("rejects invalid repository or mutation input before making a request", asy
   );
 
   await assert.rejects(
+    client.createIssue({
+      owner: "acme",
+      repo: "signal",
+      title: "Title",
+      body: "Body",
+      assignees: null as unknown as string[],
+    }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_input",
+  );
+
+  await assert.rejects(
+    client.createIssue({ owner: "acme", repo: "signal", title: "x".repeat(257), body: "Body", assignees: [] }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_input",
+  );
+
+  await assert.rejects(
+    client.createIssue({ owner: "acme", repo: "signal", title: "Title", body: "x".repeat(6001), assignees: [] }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_input",
+  );
+
+  await assert.rejects(
     client.addProgressComment({ owner: "acme", repo: "signal", issueNumber: 0, body: "Body" }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_input",
+  );
+
+  await assert.rejects(
+    client.addProgressComment({ owner: "acme", repo: "signal", issueNumber: 42, body: "x".repeat(6001) }),
     (error: unknown) => (error as { code?: string }).code === "invalid_input",
   );
 
@@ -197,22 +223,24 @@ test("classifies server and network outcomes as unknown without retrying", async
 });
 
 test("treats a malformed successful response as unknown", async () => {
-  const client = createGitHubWriteClient({
-    token: "ghs-test-token",
-    fetchImpl: async () => jsonResponse({ ok: true }),
-  });
+  for (const payload of [
+    { ok: true },
+    { id: " ", number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
+    { id: 101, number: 0, html_url: "https://github.com/acme/signal/issues/42", assignees: [] },
+    { id: 101, number: 42, html_url: "", assignees: [] },
+    { id: 101, number: 42, html_url: "https://github.com/acme/signal/issues/42", assignees: [{ login: "" }] },
+  ]) {
+    const client = createGitHubWriteClient({
+      token: "ghs-test-token",
+      fetchImpl: async () => jsonResponse(payload),
+    });
 
-  await assert.rejects(
-    client.createIssue({
-      owner: "acme",
-      repo: "signal",
-      title: "Title",
-      body: "Body",
-      assignees: [],
-    }),
-    (error: unknown) => {
-      const candidate = error as { code?: string; outcome?: string };
-      return candidate.code === "github_unknown" && candidate.outcome === "unknown";
-    },
-  );
+    await assert.rejects(
+      client.createIssue({ owner: "acme", repo: "signal", title: "Title", body: "Body", assignees: [] }),
+      (error: unknown) => {
+        const candidate = error as { code?: string; outcome?: string };
+        return candidate.code === "github_unknown" && candidate.outcome === "unknown";
+      },
+    );
+  }
 });

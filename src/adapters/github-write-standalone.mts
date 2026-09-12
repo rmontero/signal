@@ -40,6 +40,8 @@ export interface GitHubWriteClientOptions {
 
 type GitHubWriteErrorCode = "invalid_input" | "github_rejected" | "github_unknown";
 type GitHubWriteOutcome = "definite_rejection" | "unknown";
+const MAX_TITLE_LENGTH = 256;
+const MAX_BODY_LENGTH = 6_000;
 
 export class GitHubWriteError extends Error {
   readonly code: GitHubWriteErrorCode;
@@ -77,7 +79,14 @@ function validateRepository(owner: string, repo: string): void {
 
 function validateIssueInput(input: GitHubCreateIssueInput): void {
   validateRepository(input.owner, input.repo);
-  if (!input.title || typeof input.title !== "string" || typeof input.body !== "string") {
+  if (
+    typeof input.title !== "string" ||
+    !input.title ||
+    input.title.length > MAX_TITLE_LENGTH ||
+    typeof input.body !== "string" ||
+    input.body.length > MAX_BODY_LENGTH ||
+    !Array.isArray(input.assignees)
+  ) {
     throw new GitHubWriteError("invalid_input", "GitHub issue title and body are required");
   }
   if (
@@ -90,7 +99,13 @@ function validateIssueInput(input: GitHubCreateIssueInput): void {
 
 function validateCommentInput(input: GitHubAddCommentInput): void {
   validateRepository(input.owner, input.repo);
-  if (!Number.isSafeInteger(input.issueNumber) || input.issueNumber <= 0 || !input.body) {
+  if (
+    !Number.isSafeInteger(input.issueNumber) ||
+    input.issueNumber <= 0 ||
+    typeof input.body !== "string" ||
+    !input.body ||
+    input.body.length > MAX_BODY_LENGTH
+  ) {
     throw new GitHubWriteError("invalid_input", "GitHub issue number and comment body are required");
   }
 }
@@ -168,10 +183,10 @@ async function postJson(
 }
 
 function parseIdentifier(value: unknown): string | undefined {
-  if (typeof value === "string" && value) {
+  if (typeof value === "string" && value && value === value.trim()) {
     return value;
   }
-  if (typeof value === "number" && Number.isSafeInteger(value)) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return String(value);
   }
   return undefined;
@@ -181,8 +196,10 @@ function parseIssueResult(payload: unknown): GitHubIssueResult {
   if (
     !isRecord(payload) ||
     typeof payload.html_url !== "string" ||
+    !payload.html_url.trim() ||
     typeof payload.number !== "number" ||
-    !Number.isSafeInteger(payload.number)
+    !Number.isSafeInteger(payload.number) ||
+    payload.number <= 0
   ) {
     throw new GitHubWriteError("github_unknown", "GitHub returned an invalid issue result", {
       outcome: "unknown",
@@ -198,7 +215,7 @@ function parseIssueResult(payload: unknown): GitHubIssueResult {
 
   const assignees: string[] = [];
   for (const assignee of payload.assignees) {
-    if (!isRecord(assignee) || typeof assignee.login !== "string") {
+    if (!isRecord(assignee) || typeof assignee.login !== "string" || !assignee.login.trim()) {
       throw new GitHubWriteError("github_unknown", "GitHub returned an invalid assignee identity", {
         outcome: "unknown",
       });
@@ -210,7 +227,7 @@ function parseIssueResult(payload: unknown): GitHubIssueResult {
 }
 
 function parseCommentResult(payload: unknown): GitHubCommentResult {
-  if (!isRecord(payload) || typeof payload.html_url !== "string") {
+  if (!isRecord(payload) || typeof payload.html_url !== "string" || !payload.html_url.trim()) {
     throw new GitHubWriteError("github_unknown", "GitHub returned an invalid comment result", {
       outcome: "unknown",
     });
