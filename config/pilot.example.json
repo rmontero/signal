@@ -1,0 +1,17 @@
+{
+  "tenantId": "00000000-0000-4000-8000-000000000001",
+  "slackTeamId": "T_REPLACE_WITH_VERIFIED_TEAM_ID",
+  "workspaceTimezone": "America/Mexico_City",
+  "channels": [
+    {
+      "channelId": "C_REPLACE_WITH_VERIFIED_CHANNEL_ID",
+      "githubInstallationId": "REPLACE_WITH_INSTALLATION_ID",
+      "githubRepoId": "REPLACE_WITH_REPOSITORY_ID",
+      "githubOwner": "replace-with-owner",
+      "githubRepo": "replace-with-repository",
+      "approverSlackIds": ["U_REPLACE_WITH_NAMED_APPROVER_ID"]
+    }
+  ],
+  "identities": [],
+  "auth0Subjects": []
+}

@@ -1,0 +1,24 @@
+# Secrets and local provider state
+.env
+.env.*
+!.env.example
+.vercel/
+.trigger/
+*.pem
+*.key
+config/*.local.json
+
+# Generated application/runtime output
+node_modules/
+.next/
+dist/
+coverage/
+playwright-report/
+test-results/
+__pycache__/
+.venv/
+.DS_Store
+
+# Local agent scratch; tasks.md and docs/reviews remain tracked
+.superpowers/
+.agent-work/
