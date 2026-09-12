@@ -22,7 +22,7 @@ The demonstration takes less than two minutes under normal, non-rate-limited con
 - Trigger.dev is the only background task engine. It replaces the earlier Vercel Workflows design.
 - OpenRouter routes the selected OpenAI model, initially `openai/gpt-5.6-luna`. It replaces the earlier Vercel AI Gateway route. Keep one provider adapter; no duplicate inference solely to count vendors.
 - One manually configured Slack workspace for the MVP, allowlisted non-shared channels, and one repository mapping per channel.
-- Slack mentions are the only ingestion trigger. No continuous monitoring, slash commands, calendar, email, Teams, billing, or production code changes.
+- Passive observation is enabled for signed Slack messages in allowlisted non-shared channels and signed GitHub pull-request events for mapped repositories. Observation never creates proposals or GitHub writes by itself; an explicit human request remains required for action. No slash commands, calendar, email, Teams, billing, or production code changes.
 - GitHub writes are `CREATE_ISSUE` and `ADD_PROGRESS_COMMENT`. Updating an issue means adding a comment, not changing its existing title/body/state/assignees.
 - Named Slack approvers use delegated GitHub App authority. This does not claim that a Slack identity has individual GitHub permission.
 - Auth0 and CopilotKit form an optional, read-only proposal inspector. Exa is an optional, explicitly approved public-document search.

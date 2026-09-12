@@ -24,9 +24,13 @@ flowchart LR
 
 Routes verify identity, validate input and commit bounded transactions. Domain services own tenant rules, state transitions and canonicalization. Provider adapters own API formats, timeouts and sanitized error classification. Tasks orchestrate those services; they do not bypass them. The model can propose facts and text but receives neither a mutation tool nor an approval capability.
 
+## Passive observer ingress
+
+Slack Events API deliveries and GitHub `pull_request` webhooks are verified against their raw request bodies before any persistence. Only active tenant mappings for allowlisted, non-shared Slack channels and mapped GitHub repository/installations are accepted. The ingress transaction stores provider coordinates, event type, and a payload hash in Neon and creates an ID-only Trigger outbox job. It does not store raw source text, invoke the model, create proposals, or write to GitHub. Duplicate provider deliveries are idempotent.
+
 ## From mention to draft
 
-Accept only verified `app_mention` deliveries from the configured workspace and allowed non-shared channels. Persist a minimal event envelope and analysis job/outbox in one transaction before acknowledging. Slack event IDs suppress redelivery. Jobs load content server-side using verified tenant configuration; content never appears in Trigger task arguments.
+An explicit `@Signal` request remains the action/proposal trigger. Accept only verified `app_mention` deliveries from the configured workspace and allowed non-shared channels for that flow. Persist a minimal event envelope and analysis job/outbox in one transaction before acknowledging. Slack event IDs suppress redelivery. Jobs load content server-side using verified tenant configuration; content never appears in Trigger task arguments.
 
 Read root and all replies, with pagination, author IDs, edit timestamps and source permalinks. Require a complete snapshot of at most 50 messages. A missing page, revoked access or overflow prevents an actionable draft. Bound model context independently to 12,000 input tokens; an oversized complete snapshot is rejected instead of silently truncated. Exclude bot-generated messages from analysis and fingerprinting.
 

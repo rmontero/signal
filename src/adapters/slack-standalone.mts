@@ -126,6 +126,16 @@ export type SlackEnvelopeClassification =
       text: string;
     }
   | {
+      kind: "slack_message";
+      teamId: string;
+      eventId: string;
+      channelId: string;
+      messageTs: string;
+      threadTs: string;
+      userId: string;
+      text: string;
+    }
+  | {
       kind: "ignore";
       reason:
         | "unsupported_event"
@@ -134,6 +144,66 @@ export type SlackEnvelopeClassification =
         | "shared_channel"
         | "missing_fields";
     };
+
+export function classifySlackObserverEnvelope(
+  envelope: SlackEnvelope,
+  options: { botUserId?: string } = {},
+): SlackEnvelopeClassification {
+  const event = envelope.event;
+  if (envelope.type !== "event_callback" || event?.type !== "message") {
+    return { kind: "ignore", reason: "unsupported_event" };
+  }
+
+  if (event.bot_id || event.subtype === "bot_message") {
+    return { kind: "ignore", reason: "bot_event" };
+  }
+
+  if (options.botUserId && event.user === options.botUserId) {
+    return { kind: "ignore", reason: "self_event" };
+  }
+
+  if (
+    [event.is_shared, event.is_ext_shared_channel, envelope.is_ext_shared_channel].some(
+      (value) => value !== undefined && typeof value !== "boolean",
+    )
+  ) {
+    return { kind: "ignore", reason: "missing_fields" };
+  }
+
+  if (
+    event.is_shared === true ||
+    event.is_ext_shared_channel === true ||
+    envelope.is_ext_shared_channel === true ||
+    event.channel_type === "shared"
+  ) {
+    return { kind: "ignore", reason: "shared_channel" };
+  }
+
+  const threadTs = event.thread_ts ?? event.ts;
+  if (
+    !hasSlackId(envelope.team_id, /^T[A-Z0-9]+$/) ||
+    !hasSlackId(envelope.event_id, /^Ev[A-Za-z0-9_-]+$/) ||
+    !hasSlackId(event.channel, /^[CDG][A-Z0-9]+$/) ||
+    !hasSlackId(event.ts, /^\d+\.\d+$/) ||
+    typeof threadTs !== "string" ||
+    !/^\d+\.\d+$/.test(threadTs) ||
+    !hasSlackId(event.user, /^[UW][A-Z0-9]+$/) ||
+    typeof event.text !== "string"
+  ) {
+    return { kind: "ignore", reason: "missing_fields" };
+  }
+
+  return {
+    kind: "slack_message",
+    teamId: envelope.team_id,
+    eventId: envelope.event_id,
+    channelId: event.channel,
+    messageTs: event.ts,
+    threadTs,
+    userId: event.user,
+    text: event.text,
+  };
+}
 
 export function classifySlackEnvelope(
   envelope: SlackEnvelope,

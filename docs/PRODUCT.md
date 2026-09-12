@@ -10,7 +10,7 @@ An engineering team already coordinating in Slack and GitHub. The MVP is a manua
 
 | ID | Requirement | Acceptance |
 |---|---|---|
-| MVP-01 | Respond only to an explicit `@Signal` mention | Unmentioned conversation and bot-generated messages do not start analysis |
+| MVP-01 | Observe only verified Slack/GitHub events in configured sources; respond or act only after an explicit human request | Unverified, unmapped, shared-channel, and bot-generated events are ignored; observer receipt alone never starts an actionable proposal |
 | MVP-02 | Read the complete invoked thread and relevant channel/participant metadata within configured limits | Missing pages or overflow withhold the executable proposal and explain why |
 | MVP-03 | Extract decisions, tasks, owners, blockers, and deadlines with evidence | Each asserted fact references retrieved source material; absent facts remain absent |
 | MVP-04 | Retrieve relevant issues and PRs from the channel's configured repository | At most five candidates; valid links; no access to a model-selected repository |
@@ -82,7 +82,7 @@ OpenAI via OpenRouter and Trigger.dev are the selected core services. Optional i
 
 ## Out of scope
 
-Continuous monitoring; slash commands; DMs and Slack Connect/shared channels; additional workplace products; autonomous consequential actions; issue PATCH/close/delete; comment edits; PR merges; deployments; web-based GitHub approval; full task management; vector search; general document ingestion; SaaS billing; enterprise onboarding; multiple workflow engines; duplicate inference routes.
+Slash commands; DMs and Slack Connect/shared channels; additional workplace products; autonomous consequential actions; issue PATCH/close/delete; comment edits; PR merges; deployments; web-based GitHub approval; full task management; vector search; general document ingestion; SaaS billing; enterprise onboarding; multiple workflow engines; duplicate inference routes.
 
 ## Completion definitions
 

@@ -96,6 +96,24 @@ export const AcceptMentionSchema = z.object({
 }).strict();
 export type AcceptMention = z.infer<typeof AcceptMentionSchema>;
 
+export const ObserverEventSchema = z.object({
+  tenantId: id,
+  source: z.enum(["slack", "github"]),
+  providerEventId: id,
+  eventType: id,
+  channelId: id.nullable(),
+  threadTs: id.nullable(),
+  messageTs: id.nullable(),
+  actorId: id.nullable(),
+  repositoryId: id.nullable(),
+  repositoryOwner: id.nullable(),
+  repositoryName: id.nullable(),
+  installationId: id.nullable(),
+  pullRequestNumber: z.number().int().positive().nullable(),
+  payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type ObserverEvent = z.infer<typeof ObserverEventSchema>;
+
 export function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }

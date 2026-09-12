@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   classifySlackEnvelope,
+  classifySlackObserverEnvelope,
   fetchCompleteSlackThread,
   verifySlackRequestSignature,
 } from "../src/adapters/slack-standalone.mts";
@@ -153,6 +154,44 @@ test("classifies only permitted app mentions and exposes the invoked thread coor
       { botUserId: "B1" },
     ),
     { kind: "ignore", reason: "missing_fields" },
+  );
+});
+
+test("classifies ordinary allowlisted-channel messages for passive observation", () => {
+  assert.deepEqual(
+    classifySlackObserverEnvelope({
+      type: "event_callback",
+      team_id: "T1",
+      event_id: "Ev10",
+      event: {
+        type: "message",
+        user: "U1",
+        channel: "C1",
+        ts: "1.1",
+        thread_ts: "1.0",
+        text: "The release owner changed.",
+      },
+    }),
+    {
+      kind: "slack_message",
+      teamId: "T1",
+      eventId: "Ev10",
+      channelId: "C1",
+      messageTs: "1.1",
+      threadTs: "1.0",
+      userId: "U1",
+      text: "The release owner changed.",
+    },
+  );
+
+  assert.deepEqual(
+    classifySlackObserverEnvelope({
+      type: "event_callback",
+      team_id: "T1",
+      event_id: "Ev11",
+      event: { type: "message", bot_id: "B1", channel: "C1", ts: "1.1", text: "Signal output" },
+    }),
+    { kind: "ignore", reason: "bot_event" },
   );
 });
 

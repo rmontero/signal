@@ -1,6 +1,5 @@
 import { MutationSchema, payloadHash, type Mutation } from "../domain/contracts";
 import type { GitHubReadClient } from "../adapters/github-read";
-// @ts-expect-error TS5097: the provider adapter remains .mts for standalone boundary tests.
 import { GitHubWriteError, type GitHubCommentResult, type GitHubIssueResult, type GitHubWriteClient } from "../adapters/github-write-standalone.mts";
 
 export type ExecutionErrorCode =

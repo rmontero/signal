@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { SignalDb } from "./client";
 import { isUniqueViolation } from "./errors";
-import { approvals, audit, channelMappings, inbox, operations, outbox, proposals, snapshots, tenants, threads } from "./schema";
-import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, type Mutation, payloadHash, prepareMutation, type PersistedConversationRow } from "../domain/contracts";
+import { approvals, audit, channelMappings, inbox, observedEvents, operations, outbox, proposals, snapshots, tenants, threads } from "./schema";
+import { AcceptMentionSchema, type AcceptMention, ApprovalBindingSchema, type ApprovalBinding, ObserverEventSchema, type Mutation, payloadHash, prepareMutation, type PersistedConversationRow } from "../domain/contracts";
+import type { ObserverEventInput } from "../domain/observer-events";
 
 export class PersistenceConflict extends Error {
   constructor(message: string) { super(message); this.name = "PersistenceConflict"; }
@@ -15,6 +16,27 @@ export async function insertTenant(db: SignalDb, input: { tenantId: string; slac
 
 export async function insertChannelMapping(db: SignalDb, input: { tenantId: string; channelId: string; repositoryId: string; repositoryOwner: string; repositoryName: string; installationId: string; shared?: boolean }): Promise<void> {
   await db.insert(channelMappings).values({ ...input, shared: input.shared ?? false });
+}
+
+export async function resolveSlackObserverTenant(db: SignalDb, input: { slackTeamId: string; channelId: string }): Promise<string | null> {
+  const rows = await db.select({ tenantId: tenants.id }).from(tenants).innerJoin(channelMappings, and(
+    eq(channelMappings.tenantId, tenants.id),
+    eq(channelMappings.channelId, input.channelId),
+    eq(channelMappings.enabled, true),
+    eq(channelMappings.shared, false),
+  )).where(and(eq(tenants.slackTeamId, input.slackTeamId), eq(tenants.active, true))).limit(2);
+  return rows.length === 1 ? rows[0].tenantId : null;
+}
+
+export async function resolveGitHubObserverTenant(db: SignalDb, input: { repositoryId: string; installationId: string }): Promise<string | null> {
+  const rows = await db.select({ tenantId: tenants.id }).from(tenants).innerJoin(channelMappings, and(
+    eq(channelMappings.tenantId, tenants.id),
+    eq(channelMappings.repositoryId, input.repositoryId),
+    eq(channelMappings.installationId, input.installationId),
+    eq(channelMappings.enabled, true),
+  )).where(eq(tenants.active, true)).limit(100);
+  const tenantIds = new Set(rows.map((row) => row.tenantId));
+  return tenantIds.size === 1 ? rows[0].tenantId : null;
 }
 
 export async function insertThread(db: SignalDb, input: { tenantId: string; threadId?: string; channelId: string; threadTs: string }): Promise<string> {
@@ -62,6 +84,33 @@ export async function acceptMention(db: SignalDb, rawInput: AcceptMention): Prom
     const existingJob = await db.select({ jobId: outbox.id }).from(outbox).where(and(eq(outbox.tenantId, input.tenantId), eq(outbox.inboxId, existing[0].inboxId))).limit(1);
     if (!existingJob[0]) throw new Error("Inbox exists without its analysis outbox job");
     return { inboxId: existing[0].inboxId, jobId: existingJob[0].jobId, duplicate: true };
+  }
+}
+
+export async function acceptObserverEvent(db: SignalDb, rawInput: ObserverEventInput): Promise<{ eventId: string; jobId: string; duplicate: boolean }> {
+  const input = ObserverEventSchema.parse(rawInput);
+  const eventId = randomUUID();
+  const jobId = randomUUID();
+  try {
+    await db.transaction(async (tx) => {
+      await tx.insert(observedEvents).values({ ...input, id: eventId });
+      await tx.insert(outbox).values({ tenantId: input.tenantId, id: jobId, taskId: "signal.observe-event", observerEventId: eventId });
+    });
+    return { eventId, jobId, duplicate: false };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const existing = await db.select({ eventId: observedEvents.id }).from(observedEvents).where(and(
+      eq(observedEvents.tenantId, input.tenantId),
+      eq(observedEvents.source, input.source),
+      eq(observedEvents.providerEventId, input.providerEventId),
+    )).limit(1);
+    if (!existing[0]) throw error;
+    const existingJob = await db.select({ jobId: outbox.id }).from(outbox).where(and(
+      eq(outbox.tenantId, input.tenantId),
+      eq(outbox.observerEventId, existing[0].eventId),
+    )).limit(1);
+    if (!existingJob[0]) throw new Error("Observer event exists without its observation outbox job");
+    return { eventId: existing[0].eventId, jobId: existingJob[0].jobId, duplicate: true };
   }
 }
 

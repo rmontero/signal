@@ -5,6 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { createDb } from "../../src/db/client";
 import {
   acceptMention,
+  acceptObserverEvent,
   approveProposal,
   claimMutation,
   createProposal,
@@ -15,8 +16,9 @@ import {
   recordSuccessfulResult,
   PersistenceConflict,
 } from "../../src/db/repositories";
-import { inbox, operations, outbox, proposals } from "../../src/db/schema";
+import { inbox, observedEvents, operations, outbox, proposals } from "../../src/db/schema";
 import { prepareMutation } from "../../src/domain/contracts";
+import { createObserverEventInput } from "../../src/domain/observer-events";
 
 const databaseUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL_UNPOOLED or DATABASE_URL is required for persistence tests");
@@ -126,6 +128,31 @@ test("repeated delivery returns one durable inbox and analysis job", async () =>
   assert.equal((await db.select().from(outbox).where(eq(outbox.tenantId, tenantId))).length, 1);
 });
 
+test("repeated observer delivery stores coordinates and one observer job", async () => {
+  const { tenantId, channelId } = await newTenant();
+  const input = createObserverEventInput({
+    tenantId,
+    source: "slack" as const,
+    providerEventId: `Ev-${randomUUID()}`,
+    eventType: "message",
+    channelId,
+    threadTs: `1710000000.000001`,
+    messageTs: `1710000000.000002`,
+    actorId: "U-test",
+    rawBody: '{"text":"source is not persisted"}',
+  });
+  const first = await acceptObserverEvent(db, input);
+  const second = await acceptObserverEvent(db, input);
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.deepEqual(second, { ...first, duplicate: true });
+  const event = (await db.select().from(observedEvents).where(eq(observedEvents.tenantId, tenantId)))[0];
+  assert.equal(event?.channelId, channelId);
+  assert.equal(event?.payloadHash, input.payloadHash);
+  assert.equal("rawBody" in (event ?? {}), false);
+  assert.equal((await db.select().from(outbox).where(eq(outbox.tenantId, tenantId))).length, 1);
+});
+
 test("composite foreign keys reject a cross-tenant channel reference", async () => {
   const first = await newTenant();
   const secondTenant = `test-${randomUUID()}`;
@@ -203,6 +230,7 @@ after(async () => {
   for (const tenantId of tenantIds) {
     await db.execute(sql`delete from audit where tenant_id = ${tenantId}`);
     await db.execute(sql`delete from outbox where tenant_id = ${tenantId}`);
+    await db.execute(sql`delete from observed_events where tenant_id = ${tenantId}`);
     await db.execute(sql`delete from approvals where tenant_id = ${tenantId}`);
     await db.execute(sql`delete from operations where tenant_id = ${tenantId}`);
     await db.execute(sql`delete from proposals where tenant_id = ${tenantId}`);

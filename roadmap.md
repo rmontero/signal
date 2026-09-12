@@ -9,7 +9,7 @@ The build budget starts when implementation task I-01 is claimed. Documentation 
 | Elapsed implementation time | Deliverable | Gate |
 |---|---|---|
 | 00:00–00:30 | Runtime/dependency setup and provider-access preflight | Slack full-thread read, GitHub permissions/reads, database connection, harmless Trigger probe, and OpenRouter structured response verified or precisely blocked; application acceptance follows its implementation tasks |
-| 00:30–02:00 | Tenant-aware database, Slack ingestion, analysis, cards, immutable approval, issue/comment actions | Both normal paths work with focused unit/integration checks |
+| 00:30–02:00 | Tenant-aware database, passive Slack/GitHub observer ingress, Slack ingestion, analysis, cards, immutable approval, issue/comment actions | Verified observer deliveries persist and both normal action paths work with focused unit/integration checks |
 | 02:00–02:45 | Deduplication, outbox recovery, uncertain-write reconciliation, notification recovery | Essential failure tests pass; no blind mutation retry |
 | 02:45–03:30 | Optional Auth0-protected CopilotKit inspector | Real login, tenant-filtered proposal explanation; no web approval authority |
 | 03:30–04:00 | Optional Exa search and cleanup; other partners only from saved time | Approved sanitized search works or feature remains disabled |
@@ -39,7 +39,7 @@ Rob also owns `tasks.md`, shared contracts, package manifests/lockfiles, depende
 
 Cesar works in a separate checkout and OpenAI account as the downstream Slack/GitHub interaction and inspector owner. This track begins each item only when its roadmap dependency is available:
 
-- I-03 — signed Slack ingestion and durable dispatch, after I-02 interfaces are frozen
+- I-03 — signed Slack observer ingestion and durable dispatch, after I-02 interfaces are frozen
 - I-05 — human approval and deterministic GitHub actions, after I-03 and I-04 interfaces are frozen
 - O-01 and O-02, only after the core gate and with Rob reviewing tenant/auth boundaries
 - O-04, only after the core gate and within its existing timebox

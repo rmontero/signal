@@ -81,15 +81,26 @@ export const approvals = pgTable("approvals", {
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "approvals_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "approvals_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId, table.proposalId], foreignColumns: [operations.tenantId, operations.id, operations.proposalId], name: "approvals_operation_fk" }),
 ]);
 
-export const outbox = pgTable("outbox", {
-  tenantId: text("tenant_id").notNull(), id: id(), taskId: text("task_id").notNull(), inboxId: text("inbox_id"), proposalId: text("proposal_id"), operationId: text("operation_id"), dispatchState: text("dispatch_state").notNull().default("PENDING"), executionState: text("execution_state").notNull().default("READY"), attempts: integer("attempts").default(0).notNull(), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }), triggerRunId: text("trigger_run_id"), createdAt: createdAt(),
+export const observedEvents = pgTable("observed_events", {
+  tenantId: text("tenant_id").notNull(), id: id(), source: text("source").notNull(), providerEventId: text("provider_event_id").notNull(), eventType: text("event_type").notNull(),
+  channelId: text("channel_id"), threadTs: text("thread_ts"), messageTs: text("message_ts"), actorId: text("actor_id"),
+  repositoryId: text("repository_id"), repositoryOwner: text("repository_owner"), repositoryName: text("repository_name"), installationId: text("installation_id"), pullRequestNumber: integer("pull_request_number"),
+  payloadHash: text("payload_hash").notNull(), createdAt: createdAt(),
 }, (table) => [
-  primaryKey({ columns: [table.tenantId, table.id] }), check("outbox_one_entity_check", sql`num_nonnulls(${table.inboxId}, ${table.proposalId}, ${table.operationId}) = 1`), check("outbox_dispatch_state_check", sql`${table.dispatchState} in ('PENDING','CLAIMED','DISPATCHED')`), check("outbox_execution_state_check", sql`${table.executionState} in ('READY','RUNNING','SUCCEEDED','FAILED','BLOCKED')`),
-  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "outbox_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.inboxId], foreignColumns: [inbox.tenantId, inbox.id], name: "outbox_inbox_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "outbox_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId], foreignColumns: [operations.tenantId, operations.id], name: "outbox_operation_fk" }),
+  primaryKey({ columns: [table.tenantId, table.id] }), unique("observed_events_provider_unique").on(table.tenantId, table.source, table.providerEventId),
+  check("observed_events_source_check", sql`${table.source} in ('slack','github')`),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "observed_events_tenant_fk" }),
+]);
+
+export const outbox = pgTable("outbox", {
+  tenantId: text("tenant_id").notNull(), id: id(), taskId: text("task_id").notNull(), inboxId: text("inbox_id"), proposalId: text("proposal_id"), operationId: text("operation_id"), observerEventId: text("observer_event_id"), dispatchState: text("dispatch_state").notNull().default("PENDING"), executionState: text("execution_state").notNull().default("READY"), attempts: integer("attempts").default(0).notNull(), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }), triggerRunId: text("trigger_run_id"), createdAt: createdAt(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.id] }), check("outbox_one_entity_check", sql`num_nonnulls(${table.inboxId}, ${table.proposalId}, ${table.operationId}, ${table.observerEventId}) = 1`), check("outbox_dispatch_state_check", sql`${table.dispatchState} in ('PENDING','CLAIMED','DISPATCHED')`), check("outbox_execution_state_check", sql`${table.executionState} in ('READY','RUNNING','SUCCEEDED','FAILED','BLOCKED')`),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "outbox_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.inboxId], foreignColumns: [inbox.tenantId, inbox.id], name: "outbox_inbox_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "outbox_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId], foreignColumns: [operations.tenantId, operations.id], name: "outbox_operation_fk" }), foreignKey({ columns: [table.tenantId, table.observerEventId], foreignColumns: [observedEvents.tenantId, observedEvents.id], name: "outbox_observer_event_fk" }),
 ]);
 
 export const audit = pgTable("audit", {
   tenantId: text("tenant_id").notNull(), id: id(), actorSlackId: text("actor_slack_id"), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), fromState: text("from_state"), toState: text("to_state"), payloadHash: text("payload_hash"), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.tenantId, table.id] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "audit_tenant_fk" })]);
 
-export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, outbox, audit };
+export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, observedEvents, outbox, audit };
