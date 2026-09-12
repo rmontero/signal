@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# Keep developer-specific overrides (including .env.local) untracked.
+.env.local
 .vercel/
 .trigger/
 *.pem
@@ -9,6 +11,7 @@
 config/*.local.json
 
 # Generated application/runtime output
+# Dependencies stay local and are installed with npm ci.
 node_modules/
 .next/
 dist/
