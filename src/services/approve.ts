@@ -49,6 +49,17 @@ export interface ReviewRequest {
   modalId: string;
 }
 
+export type PrepareReviewRequest = Omit<ReviewRequest, "modalId">;
+
+export interface DismissProposalRequest extends PrepareReviewRequest {
+  version: number;
+}
+
+export interface PreparedProposalReview {
+  result: ReviewResult;
+  review: Omit<ProposalReview, "modalId">;
+}
+
 export interface ApprovalRequest extends ApprovalBinding {
   modalId: string;
 }
@@ -146,35 +157,47 @@ async function loadScopedProposal(
   return proposal;
 }
 
-export async function openProposalReview(input: ReviewRequest, dependencies: ApprovalDependencies): Promise<ReviewResult> {
+export async function prepareProposalReview(input: PrepareReviewRequest, dependencies: ApprovalDependencies): Promise<PreparedProposalReview> {
   requireId(input.slackTeamId, "slackTeamId");
   requireId(input.channelId, "channelId");
   requireId(input.actorSlackId, "actorSlackId");
-  requireId(input.modalId, "modalId");
   const proposal = await loadScopedProposal({ tenantId: input.tenantId, proposalId: input.proposalId }, dependencies);
   if (proposal.slackTeamId !== input.slackTeamId || proposal.channelId !== input.channelId) {
     throw new ApprovalError("approval_not_found", "proposal is unavailable");
   }
-  try {
-    await dependencies.recordReview({
+  return {
+    result: {
+      proposalId: proposal.proposalId,
+      version: proposal.version,
+      mutation: proposal.mutation,
+      expiresAt: proposal.expiresAt.toISOString(),
+      privateMetadata: JSON.stringify({ tenantId: proposal.tenantId, proposalId: proposal.proposalId, operationId: proposal.operationId, version: proposal.version, payloadHash: proposal.payloadHash, expiresAt: proposal.expiresAt.toISOString(), slackTeamId: proposal.slackTeamId, channelId: proposal.channelId }),
+    },
+    review: {
       tenantId: proposal.tenantId,
       proposalId: proposal.proposalId,
-      modalId: input.modalId,
       actorSlackId: input.actorSlackId,
       slackTeamId: input.slackTeamId,
       channelId: input.channelId,
       version: proposal.version,
-    });
+    },
+  };
+}
+
+export async function recordProposalReview(prepared: PreparedProposalReview, modalId: string, dependencies: ApprovalDependencies): Promise<void> {
+  requireId(modalId, "modalId");
+  try {
+    await dependencies.recordReview({ ...prepared.review, modalId });
   } catch {
     throw new ApprovalError("approval_persistence_failed", "review state could not be recorded");
   }
-  return {
-    proposalId: proposal.proposalId,
-    version: proposal.version,
-    mutation: proposal.mutation,
-    expiresAt: proposal.expiresAt.toISOString(),
-    privateMetadata: JSON.stringify({ tenantId: proposal.tenantId, proposalId: proposal.proposalId, operationId: proposal.operationId, version: proposal.version, payloadHash: proposal.payloadHash, slackTeamId: proposal.slackTeamId, channelId: proposal.channelId }),
-  };
+}
+
+export async function openProposalReview(input: ReviewRequest, dependencies: ApprovalDependencies): Promise<ReviewResult> {
+  requireId(input.modalId, "modalId");
+  const prepared = await prepareProposalReview(input, dependencies);
+  await recordProposalReview(prepared, input.modalId, dependencies);
+  return prepared.result;
 }
 
 export async function submitProposalApproval(input: ApprovalRequest, dependencies: ApprovalDependencies): Promise<{ approvalId: string; jobId: string }> {
@@ -218,9 +241,10 @@ export async function submitProposalApproval(input: ApprovalRequest, dependencie
   }
 }
 
-export async function dismissProposal(input: ReviewRequest, dependencies: ApprovalDependencies): Promise<void> {
+export async function dismissProposal(input: DismissProposalRequest, dependencies: ApprovalDependencies): Promise<void> {
   const proposal = await loadScopedProposal({ tenantId: input.tenantId, proposalId: input.proposalId }, dependencies);
   if (proposal.slackTeamId !== input.slackTeamId || proposal.channelId !== input.channelId) throw new ApprovalError("approval_not_found", "proposal is unavailable");
+  if (proposal.version !== input.version) throw new ApprovalError("approval_stale", "proposal version is stale");
   try {
     await dependencies.dismiss({ tenantId: proposal.tenantId, proposalId: proposal.proposalId, version: proposal.version, slackTeamId: input.slackTeamId, channelId: input.channelId, actorSlackId: input.actorSlackId });
   } catch {
