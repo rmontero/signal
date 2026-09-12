@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Signal",
-  description: "Reviewable, evidence-backed workplace actions.",
+  title: "Signal · Conversation intelligence",
+  description: "Surface the conversations that need human judgment.",
 };
 
 export default function RootLayout({
