@@ -13,6 +13,7 @@ config/*.local.json
 # Generated application/runtime output
 # Dependencies stay local and are installed with npm ci.
 node_modules/
+*.tsbuildinfo
 .next/
 dist/
 coverage/
@@ -27,3 +28,5 @@ __pycache__/
 .agent-work/
 .ambi/
 .copilotkit/
+.vercel
+.env*
