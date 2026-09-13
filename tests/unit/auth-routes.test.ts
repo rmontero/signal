@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { registerHooks } from "node:module";
 import test, { after, afterEach, beforeEach, mock } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
@@ -238,4 +240,154 @@ test("SDK error responses are redacted without losing cookie cleanup", async () 
   assert.equal(response.status, 400);
   assert.equal(await response.text(), "Authentication is unavailable.");
   assert.equal(response.headers.get("set-cookie"), "__txn_fixture=; Max-Age=0");
+});
+
+// A separate process exercises the default exported route/client and captures
+// the SDK's actual stderr without mocking SDK methods or replacing console.
+const discoveryFailureProbe = String.raw`
+  import assert from "node:assert/strict";
+  import { registerHooks } from "node:module";
+  import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
+  registerHooks({ resolve(specifier, context, nextResolve) {
+    return specifier === "server-only"
+      ? { url: "data:text/javascript,export {};", shortCircuit: true }
+      : nextResolve(specifier, context);
+  } });
+  const marker = "PRIV_X1";
+  const issuer = process.env.AUTH0_ISSUER_BASE_URL + "/";
+  let fixtureFetches = 0;
+  globalThis.fetch = async (input) => {
+    assert.equal(String(input), issuer + ".well-known/openid-configuration");
+    fixtureFetches++;
+    const headers = { "content-type": "application/json", "x-provider-detail": marker };
+    switch (process.argv[1]) {
+      case "transport": throw new Error(marker, { cause: { private_payload: marker } });
+      case "issuer": return Response.json({ issuer: "https://wrong.example/", private_payload: marker }, { headers });
+      case "missing-issuer": return Response.json({ private_payload: marker }, { headers });
+      case "array": return Response.json([marker], { headers });
+      case "oversize": return Response.json({ issuer, private_payload: marker.repeat(150_000) }, { headers });
+      case "invalid-json": return new Response(marker, { headers });
+      case "http": return new Response(marker, { status: 503, statusText: marker, headers });
+      case "stream": return new Response(new ReadableStream({ start(controller) { controller.error(new Error(marker)); } }), { headers });
+      default: throw new Error("Unexpected fixture scenario");
+    }
+  };
+  const cookie = await generateSessionCookie({
+    user: { sub: "auth0|fixture" },
+    tokenSet: { accessToken: "fixture-access-token", expiresAt: Math.floor(Date.now() / 1000) + 3600 },
+  }, { secret: process.env.AUTH0_SECRET });
+  const { GET } = await import("./src/app/auth/logout/route.ts");
+  const response = await GET(new Request(process.env.AUTH0_BASE_URL + "/auth/logout?returnTo=https://evil.example", {
+    headers: { cookie: "__session=" + cookie + "; __txn_fixture=opaque" },
+  }));
+  console.log(JSON.stringify({
+    status: response.status, body: await response.text(), location: response.headers.get("location"),
+    sessionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session=;") && cookie.includes("Max-Age=0")),
+    transactionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__txn_fixture=;") && cookie.includes("Max-Age=0")),
+    cacheControl: response.headers.get("cache-control"), referrerPolicy: response.headers.get("referrer-policy"), fixtureFetches,
+  }));
+`;
+
+for (const scenario of ["issuer", "missing-issuer", "array", "oversize", "invalid-json", "http", "transport", "stream"]) {
+  test(`real SDK discovery failure keeps provider details out of logs: ${scenario}`, () => {
+    const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", discoveryFailureProbe, scenario], {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000,
+    });
+    assert.equal(probe.status, 0, probe.stderr);
+    const response = JSON.parse(probe.stdout);
+    assert.equal(response.status, 500);
+    assert.equal(response.body, "Authentication is unavailable.");
+    assert.equal(response.location, null);
+    assert.equal(response.sessionCleared, true);
+    assert.equal(response.transactionCleared, true);
+    assert.match(response.cacheControl, /no-store/);
+    assert.equal(response.referrerPolicy, "no-referrer");
+    assert.equal(response.fixtureFetches, 1);
+    assert.equal((probe.stderr + probe.stdout).includes("PRIV_X1"), false, "Provider fixture details must not reach logs or HTTP output");
+    assert.match(probe.stderr, /AUTH0_(DISCOVERY|HTTP|TRANSPORT)_FAILURE/);
+    assert.doesNotMatch(probe.stderr, /\n\s+at /, "Only a bounded diagnostic category should reach the SDK logger");
+  });
+}
+
+test("real SDK callback retains PKCE, state and token-claim validation through the transport boundary", () => {
+  const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", String.raw`
+    import assert from "node:assert/strict";
+    import { createHash, generateKeyPairSync, sign } from "node:crypto";
+    import { registerHooks } from "node:module";
+    import { NextRequest } from "next/server.js";
+    registerHooks({ resolve(specifier, context, nextResolve) {
+      return specifier === "server-only"
+        ? { url: "data:text/javascript,export {};", shortCircuit: true }
+        : nextResolve(specifier, context);
+    } });
+    const issuer = process.env.AUTH0_ISSUER_BASE_URL + "/";
+    const base = process.env.AUTH0_BASE_URL;
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    let nonce;
+    let challenge;
+    let tokenRequests = 0;
+    let discoveryRequests = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === issuer + ".well-known/openid-configuration") {
+        discoveryRequests++;
+        return Response.json({
+          issuer, authorization_endpoint: issuer + "authorize", token_endpoint: issuer + "oauth/token",
+          jwks_uri: issuer + ".well-known/jwks.json", end_session_endpoint: issuer + "oidc/logout",
+          response_types_supported: ["code"], subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"],
+          private_payload: "PRIV_X1",
+        });
+      }
+      if (url === issuer + ".well-known/jwks.json") {
+        return Response.json({ keys: [{ ...publicKey.export({ format: "jwk" }), kid: "fixture", alg: "RS256", use: "sig" }] });
+      }
+      assert.equal(url, issuer + "oauth/token");
+      const form = new URLSearchParams(init.body);
+      assert.equal(form.get("redirect_uri"), base + "/auth/callback");
+      assert.equal(createHash("sha256").update(form.get("code_verifier")).digest("base64url"), challenge);
+      tokenRequests++;
+      const now = Math.floor(Date.now() / 1000);
+      const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      const unsigned = encode({ alg: "RS256", kid: "fixture" }) + "." + encode({
+        iss: form.get("code") === "wrong-issuer" ? "https://wrong.example/" : issuer,
+        aud: process.env.AUTH0_CLIENT_ID, sub: "auth0|fixture", iat: now, exp: now + 3600,
+        nonce: form.get("code") === "wrong-nonce" ? "wrong-nonce" : nonce,
+      });
+      const idToken = unsigned + "." + sign("RSA-SHA256", Buffer.from(unsigned), privateKey).toString("base64url");
+      return Response.json({ token_type: "Bearer", access_token: "fixture-access-token", id_token: idToken, expires_in: 3600 });
+    };
+    const { auth0 } = await import("./src/lib/auth0.ts");
+    const { GET: callback } = await import("./src/app/auth/callback/route.ts");
+    const cookieHeader = (response) => response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+    for (const mode of ["valid", "wrong-state", "wrong-nonce", "wrong-issuer"]) {
+      const start = await auth0.middleware(new Request(base + "/auth/login?returnTo=%2Fsettings"));
+      assert.equal(start.status, 307);
+      const authorization = new URL(start.headers.get("location"));
+      assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
+      nonce = authorization.searchParams.get("nonce");
+      challenge = authorization.searchParams.get("code_challenge");
+      const url = new URL(base + "/auth/callback");
+      url.searchParams.set("state", mode === "wrong-state" ? "unverified-state" : authorization.searchParams.get("state"));
+      url.searchParams.set("code", mode);
+      url.searchParams.set("returnTo", "https://evil.example");
+      const response = await callback(new Request(url, { headers: { cookie: cookieHeader(start) } }));
+      if (mode === "valid") {
+        assert.equal(response.status, 307);
+        assert.equal(response.headers.get("location"), base + "/settings");
+        const session = await auth0.getSession(new NextRequest(base, { headers: { cookie: cookieHeader(response) } }));
+        assert.equal(session?.user.sub, "auth0|fixture");
+      } else {
+        assert.equal(response.status, 400);
+        assert.equal(await response.text(), "Authentication is unavailable.");
+        assert.equal(response.headers.get("location"), null);
+        assert.equal(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session=")), false);
+      }
+    }
+    assert.equal(discoveryRequests, 1);
+    assert.equal(tokenRequests, 3);
+    console.log("PKCE/state/token-claim checks passed; external requests: 0");
+  `], { cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000 });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stderr, "");
+  assert.match(probe.stdout, /PKCE\/state\/token-claim checks passed; external requests: 0/);
 });

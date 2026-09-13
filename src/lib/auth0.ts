@@ -74,11 +74,77 @@ export const finishAuth0Callback: NonNullable<Auth0ClientOptions["onCallback"]> 
   return protectAuthResponse(NextResponse.redirect(new URL(validateReturnTo(context.returnTo, appBaseUrl), appBaseUrl)));
 };
 
+type Auth0Diagnostic = "AUTH0_TRANSPORT_FAILURE" | "AUTH0_HTTP_FAILURE" | "AUTH0_DISCOVERY_FAILURE";
+
+function auth0Diagnostic(category: Auth0Diagnostic): Error {
+  const error = new Error(category);
+  // The SDK logs this value. Retain no upstream message, cause, response or stack.
+  error.stack = category;
+  return error;
+}
+
+async function readDiscoveryBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let body = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return body + decoder.decode();
+      bytes += value.byteLength;
+      // Match SDK 4.29.0's one-MiB response limit before buffering discovery.
+      if (bytes > 1024 * 1024) throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+      body += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+function createAuth0Fetch(domain: string): typeof fetch {
+  const upstreamFetch = globalThis.fetch;
+  const issuer = new URL(`https://${domain}/`);
+  const discoveryUrl = new URL(".well-known/openid-configuration", issuer).href;
+  return async (input, init) => {
+    let response: Response;
+    try {
+      response = await upstreamFetch(input, init);
+    } catch {
+      throw auth0Diagnostic("AUTH0_TRANSPORT_FAILURE");
+    }
+    // Task 1's discovery, token, JWKS and revocation responses require HTTP 200.
+    // Never pass an error response (including its headers/body) to SDK loggers.
+    if (response.status !== 200) {
+      await response.body?.cancel().catch(() => undefined);
+      throw auth0Diagnostic("AUTH0_HTTP_FAILURE");
+    }
+    if ((input instanceof Request ? input.url : String(input)) !== discoveryUrl) return response;
+    try {
+      const body = await readDiscoveryBody(response);
+      const metadata: unknown = JSON.parse(body);
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) || !("issuer" in metadata)
+        || typeof metadata.issuer !== "string" || new URL(metadata.issuer).href !== issuer.href) {
+        throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+      }
+      // Re-emit the checked body so later stream failures cannot bypass this
+      // boundary. The SDK still validates this unchanged metadata and all tokens.
+      return new Response(body, { headers: { "content-type": "application/json" } });
+    } catch {
+      throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+    }
+  };
+}
+
 // A route-specific callback hook lets Task 2 add post-login onboarding while
 // retaining the SDK's state, nonce, PKCE, token verification and session handling.
 export function createAuth0Client(options: Pick<Auth0ClientOptions, "onCallback"> = {}): Auth0Client {
+  const settings = readAuth0Settings();
   return new Auth0Client({
-    ...readAuth0Settings(),
+    ...settings,
+    customFetch: createAuth0Fetch(settings.domain),
     authorizationParameters: { scope: "openid profile email" },
     routes: { login: "/auth/login", logout: "/auth/logout", callback: "/auth/callback" },
     session: { rolling: false, cookie: { sameSite: "lax", path: "/" } },
