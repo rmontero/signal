@@ -104,6 +104,26 @@ async function readDiscoveryBody(response: Response): Promise<string> {
   }
 }
 
+function validateDiscoveryEndpoints(metadata: object): void {
+  const endpointSets = [metadata];
+  if ("mtls_endpoint_aliases" in metadata) {
+    const aliases = metadata.mtls_endpoint_aliases;
+    if (!aliases || typeof aliases !== "object" || Array.isArray(aliases)) {
+      throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+    }
+    endpointSets.push(aliases);
+  }
+  for (const endpoints of endpointSets) {
+    for (const [name, value] of Object.entries(endpoints)) {
+      if (name.endsWith("_endpoint") || name === "jwks_uri") {
+        if (typeof value !== "string" || new URL(value).protocol !== "https:") {
+          throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+        }
+      }
+    }
+  }
+}
+
 function createAuth0Fetch(domain: string): typeof fetch {
   const upstreamFetch = globalThis.fetch;
   const issuer = new URL(`https://${domain}/`);
@@ -129,6 +149,9 @@ function createAuth0Fetch(domain: string): typeof fetch {
         || typeof metadata.issuer !== "string" || new URL(metadata.issuer).href !== issuer.href) {
         throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
       }
+      // SDK endpoint resolution can throw and log before customFetch is called.
+      // Keep URL parsing and protocol rejection inside this guarded boundary.
+      validateDiscoveryEndpoints(metadata);
       // Re-emit the checked body so later stream failures cannot bypass this
       // boundary. The SDK still validates this unchanged metadata and all tokens.
       return new Response(body, { headers: { "content-type": "application/json" } });

@@ -309,6 +309,133 @@ for (const scenario of ["issuer", "missing-issuer", "array", "oversize", "invali
   });
 }
 
+const refreshTokenLogoutProbe = String.raw`
+  import assert from "node:assert/strict";
+  import { registerHooks } from "node:module";
+  import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
+  import { NextRequest } from "next/server.js";
+  registerHooks({ resolve(specifier, context, nextResolve) {
+    return specifier === "server-only"
+      ? { url: "data:text/javascript,export {};", shortCircuit: true }
+      : nextResolve(specifier, context);
+  } });
+  const issuer = process.env.AUTH0_ISSUER_BASE_URL + "/";
+  const base = process.env.AUTH0_BASE_URL;
+  let discoveryRequests = 0;
+  let revocationRequests = 0;
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === issuer + ".well-known/openid-configuration") {
+      discoveryRequests++;
+      return Response.json({
+        issuer, authorization_endpoint: issuer + "authorize", token_endpoint: issuer + "oauth/token",
+        jwks_uri: issuer + ".well-known/jwks.json", end_session_endpoint: issuer + "oidc/logout",
+        revocation_endpoint: issuer + "oauth/revoke",
+        mtls_endpoint_aliases: { revocation_endpoint: issuer + "oauth/revoke" },
+        ...JSON.parse(process.argv[1]),
+      });
+    }
+    assert.equal(String(input), issuer + "oauth/revoke");
+    assert.equal(init.method, "POST");
+    const form = new URLSearchParams(init.body);
+    assert.equal(form.get("token"), "fixture-private-refresh-token");
+    assert.equal(form.get("token_type_hint"), "refresh_token");
+    revocationRequests++;
+    return new Response(null, { status: 200 });
+  };
+  const cookie = await generateSessionCookie({
+    user: { sub: "auth0|fixture" },
+    tokenSet: {
+      accessToken: "fixture-access-token", refreshToken: "fixture-private-refresh-token",
+      idToken: "fixture-private-id-token", expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    },
+    internal: { sid: "fixture-logout-session", createdAt: Math.floor(Date.now() / 1000) },
+  }, { secret: process.env.AUTH0_SECRET });
+  const { auth0 } = await import("./src/lib/auth0.ts");
+  const { GET } = await import("./src/app/auth/logout/route.ts");
+  const headers = { cookie: "__session=" + cookie + "; __txn_fixture=opaque" };
+  const session = await auth0.getSession(new NextRequest(base, { headers }));
+  assert.equal(session?.tokenSet.refreshToken, "fixture-private-refresh-token");
+  const url = new URL(base + "/auth/logout");
+  url.searchParams.set("returnTo", process.argv[2]);
+  const response = await GET(new Request(url, { headers }));
+  console.log(JSON.stringify({
+    status: response.status, body: await response.text(), headers: Object.fromEntries(response.headers),
+    sessionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session=;") && cookie.includes("Max-Age=0")),
+    transactionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__txn_fixture=;") && cookie.includes("Max-Age=0")),
+    discoveryRequests, revocationRequests,
+  }));
+`;
+
+function probeRefreshTokenLogout(metadata: Record<string, unknown>, returnTo = "/settings?tab=connections") {
+  const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", refreshTokenLogoutProbe, JSON.stringify(metadata), returnTo], {
+    cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000,
+  });
+  assert.equal(probe.status, 0, probe.stderr);
+  const output = probe.stderr + probe.stdout;
+  for (const privateValue of ["PRIV_ENDPOINT", "fixture-private-refresh-token", "fixture-private-id-token"]) {
+    assert.equal(probe.stdout.includes(privateValue), false, "Provider details and tokens must not reach HTTP output");
+    assert.equal(probe.stderr.includes(privateValue), false, "Provider details and tokens must not reach SDK stderr");
+  }
+  assert.doesNotMatch(output, /OperationProcessingError|TypeError|OAUTH_HTTP_REQUEST_FORBIDDEN|\[cause\]|\n\s+at /);
+  const response = JSON.parse(probe.stdout);
+  assert.equal(response.sessionCleared, true);
+  assert.equal(response.transactionCleared, true);
+  assert.equal(response.discoveryRequests, 1);
+  assert.match(response.headers["cache-control"], /no-store/);
+  assert.equal(response.headers["referrer-policy"], "no-referrer");
+  return { response, stderr: probe.stderr };
+}
+
+const privateHttpEndpoint = "http://tenant.example.auth0.com/oauth/revoke?private=PRIV_ENDPOINT";
+const invalidDiscoveryEndpoints: [string, Record<string, unknown>][] = [
+  ...[
+    "authorization_endpoint", "token_endpoint", "jwks_uri", "registration_endpoint", "revocation_endpoint",
+    "introspection_endpoint", "device_authorization_endpoint", "userinfo_endpoint",
+    "pushed_authorization_request_endpoint", "backchannel_authentication_endpoint", "end_session_endpoint",
+  ].map((field): [string, Record<string, unknown>] => [`HTTP ${field}`, { [field]: privateHttpEndpoint }]),
+  ["FTP revocation endpoint", { revocation_endpoint: "ftp://tenant.example.auth0.com/revoke?private=PRIV_ENDPOINT" }],
+  ["relative revocation endpoint", { revocation_endpoint: "/oauth/revoke?private=PRIV_ENDPOINT" }],
+  ["malformed revocation URL", { revocation_endpoint: "https://[PRIV_ENDPOINT]" }],
+  ["object revocation endpoint", { revocation_endpoint: { private: "PRIV_ENDPOINT" } }],
+  ["null revocation endpoint", { revocation_endpoint: null }],
+  ["empty revocation endpoint", { revocation_endpoint: "" }],
+  ["array end-session endpoint", { end_session_endpoint: [privateHttpEndpoint] }],
+  ["malformed end-session URL", { end_session_endpoint: "https://[PRIV_ENDPOINT]" }],
+  ["HTTP mTLS revocation alias", { mtls_endpoint_aliases: { revocation_endpoint: privateHttpEndpoint } }],
+  ["malformed mTLS aliases", { mtls_endpoint_aliases: [privateHttpEndpoint] }],
+];
+
+for (const [scenario, metadata] of invalidDiscoveryEndpoints) {
+  test(`real SDK refresh-token logout rejects unsafe discovery endpoints: ${scenario}`, () => {
+    const { response, stderr } = probeRefreshTokenLogout(metadata);
+    assert.match(stderr, /AUTH0_DISCOVERY_FAILURE/);
+    assert.equal(response.status, 500);
+    assert.equal(response.body, "Authentication is unavailable.");
+    // Never redirect through rejected metadata or attempt revocation over HTTP.
+    assert.equal(response.headers.location, undefined);
+    assert.equal(response.revocationRequests, 0);
+  });
+}
+
+test("real SDK refresh-token logout still revokes over HTTPS and preserves only safe redirects", () => {
+  for (const [returnTo, expected] of [
+    ["/settings?tab=connections", "https://signal.example/settings?tab=connections"],
+    ["https://evil.example", "https://signal.example/"],
+    ["//evil.example", "https://signal.example/"],
+  ]) {
+    const { response, stderr } = probeRefreshTokenLogout({}, returnTo);
+    assert.equal(stderr, "");
+    assert.equal(response.status, 307);
+    assert.equal(response.revocationRequests, 1);
+    const redirect = new URL(response.headers.location);
+    assert.equal(redirect.origin, "https://tenant.example.auth0.com");
+    assert.equal(redirect.pathname, "/oidc/logout");
+    assert.equal(redirect.searchParams.get("logout_hint"), "fixture-logout-session");
+    assert.equal(redirect.searchParams.get("post_logout_redirect_uri"), expected);
+    assert.equal(redirect.searchParams.has("id_token_hint"), false);
+  }
+});
+
 test("real SDK callback retains PKCE, state and token-claim validation through the transport boundary", () => {
   const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", String.raw`
     import assert from "node:assert/strict";
