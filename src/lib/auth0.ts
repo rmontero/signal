@@ -82,6 +82,8 @@ export function createAuth0Client(options: Pick<Auth0ClientOptions, "onCallback"
     authorizationParameters: { scope: "openid profile email" },
     routes: { login: "/auth/login", logout: "/auth/logout", callback: "/auth/callback" },
     session: { rolling: false, cookie: { sameSite: "lax", path: "/" } },
+    // Logout redirects must not serialize the session's ID token into a URL.
+    includeIdTokenHintInOIDCLogoutUrl: false,
     enableAccessTokenEndpoint: false,
     enableConnectAccountEndpoint: false,
     onCallback: options.onCallback ?? finishAuth0Callback,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test, { after, afterEach, beforeEach, mock } from "node:test";
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
+import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
 import type { SessionData } from "@auth0/nextjs-auth0/types";
 import { NextResponse } from "next/server.js";
 
@@ -141,6 +142,48 @@ test("logout rejects unsafe return paths and defaults to the configured origin",
   for (const call of middleware.mock.calls) {
     assert.equal(new URL((call.arguments[0] as Request).url).searchParams.get("returnTo"), "https://signal.example/");
   }
+});
+
+test("real SDK logout omits the ID token from redirects and preserves safe return paths", async () => {
+  const issuer = `${settings.AUTH0_ISSUER_BASE_URL}/`;
+  const discovery = mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    assert.equal(input instanceof Request ? input.url : String(input), `${issuer}.well-known/openid-configuration`);
+    return Response.json({
+      issuer, authorization_endpoint: `${issuer}authorize`, token_endpoint: `${issuer}oauth/token`,
+      jwks_uri: `${issuer}.well-known/jwks.json`, end_session_endpoint: `${issuer}oidc/logout`,
+      response_types_supported: ["code"], subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"],
+    });
+  });
+  // The SDK captures fetch at construction. Use a fresh configured client so
+  // the real route and SDK run against this test's discovery fixture only.
+  const sdkMiddleware = Auth0Client.prototype.middleware;
+  const sdkClient = createAuth0Client();
+  mock.method(Auth0Client.prototype, "middleware", (input: Request) => sdkMiddleware.call(sdkClient, input));
+  const idToken = "fixture-private-id-token-not-for-urls";
+  const cookie = await generateSessionCookie({
+    user: { sub: "auth0|fixture" },
+    tokenSet: { idToken, accessToken: "fixture-access-token", expiresAt: Math.floor(Date.now() / 1000) + 3600 },
+    internal: { sid: "fixture-logout-session", createdAt: Math.floor(Date.now() / 1000) },
+  }, { secret: settings.AUTH0_SECRET });
+
+  for (const returnTo of ["/settings?tab=connections", "https://evil.example", "//evil.example"]) {
+    const response = await logout(new Request(request("logout", returnTo), { headers: { cookie: `__session=${cookie}` } }));
+    assert.equal(response.status, 307);
+    const location = response.headers.get("location")!;
+    const redirect = new URL(location);
+    assert.equal(redirect.origin, settings.AUTH0_ISSUER_BASE_URL);
+    assert.equal(redirect.pathname, "/oidc/logout");
+    // Proves the encrypted session was loaded, so token omission is not vacuous.
+    assert.equal(redirect.searchParams.get("logout_hint"), "fixture-logout-session");
+    assert.equal(redirect.searchParams.get("client_id"), settings.AUTH0_CLIENT_ID);
+    assert.equal(redirect.searchParams.has("id_token_hint"), false);
+    assert.equal(location.includes(idToken), false);
+    assert.equal(redirect.searchParams.get("post_logout_redirect_uri"), new URL(returnTo.startsWith("/settings") ? returnTo : "/", settings.AUTH0_BASE_URL).href);
+    assert.equal(response.cookies.get("__session")?.value, "");
+    assert.match(response.headers.get("cache-control")!, /no-store/);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  }
+  assert.equal(discovery.mock.callCount(), 1);
 });
 
 test("callback delegates state/code verification to the SDK and ignores browser returnTo", async () => {
