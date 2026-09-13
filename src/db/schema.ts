@@ -1,13 +1,25 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
 
 const id = () => text("id").notNull();
 const createdAt = () => timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull();
 
 export const tenants = pgTable("tenants", {
-  id: id(), slackTeamId: text("slack_team_id").notNull(), active: boolean("active").default(true).notNull(),
+  id: id(), slackTeamId: text("slack_team_id"), displayName: text("display_name").default("My workspace").notNull(), active: boolean("active").default(true).notNull(),
   configVersion: integer("config_version").default(1).notNull(), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.id] }), unique("tenants_slack_team_unique").on(table.slackTeamId)]);
+
+export const tenantMemberships = pgTable("tenant_memberships", {
+  tenantId: text("tenant_id").notNull(), id: id(), auth0Subject: text("auth0_subject").notNull(),
+  role: text("role").$type<"OWNER" | "ADMIN" | "MEMBER">().notNull(), active: boolean("active").default(true).notNull(), createdAt: createdAt(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.id] }),
+  unique("tenant_memberships_subject_unique").on(table.tenantId, table.auth0Subject),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "tenant_memberships_tenant_fk" }),
+  check("tenant_memberships_role_check", sql`${table.role} in ('OWNER','ADMIN','MEMBER')`),
+  check("tenant_memberships_subject_check", sql`${table.auth0Subject} collate "C" ~ '^[!-~]{1,255}$'`),
+  index("tenant_memberships_subject_lookup").on(table.auth0Subject),
+]);
 
 export const channelMappings = pgTable("channel_mappings", {
   tenantId: text("tenant_id").notNull(), channelId: text("channel_id").notNull(), repositoryId: text("repository_id").notNull(),
@@ -114,4 +126,4 @@ export const audit = pgTable("audit", {
   tenantId: text("tenant_id").notNull(), id: id(), actorSlackId: text("actor_slack_id"), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), fromState: text("from_state"), toState: text("to_state"), payloadHash: text("payload_hash"), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.tenantId, table.id] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "audit_tenant_fk" })]);
 
-export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, slackReviews, observedEvents, outbox, audit };
+export const schema = { tenants, tenantMemberships, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, slackReviews, observedEvents, outbox, audit };
