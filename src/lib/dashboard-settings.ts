@@ -23,6 +23,8 @@ export type ConnectorEnvironment = Partial<Record<
   | "SLACK_BOT_TOKEN"
   | "GITHUB_APP_ID"
   | "GITHUB_APP_PRIVATE_KEY"
+  | "GITHUB_WEBHOOK_SECRET"
+  | "GITHUB_APP_LOGIN"
   | "AUTH0_DOMAIN"
   | "AUTH0_CLIENT_ID"
   | "AUTH0_CLIENT_SECRET"
@@ -36,6 +38,7 @@ export type ConnectorEnvironment = Partial<Record<
   string | undefined
 >>;
 
+// Preserve the existing API: "ready" means required names are present, not a live connection.
 export type ConnectorStatus = "ready" | "needs-config" | "not-configured";
 
 export type ConnectorSummary = {
@@ -60,54 +63,52 @@ export function getConnectorStatuses(env: ConnectorEnvironment): ConnectorSummar
       name: "Neon",
       category: "Data" as const,
       required: ["DATABASE_URL", "SIGNAL_DASHBOARD_TENANT_ID"],
-      detail: "Tenant-scoped database reads are configured.",
+      detail: "Set an active pilot tenant on the server and import its allowed channel/repository mappings. A successful dashboard refresh verifies only that database read.",
     },
     {
       id: "slack",
       name: "Slack",
       category: "Sources" as const,
       required: ["SLACK_SIGNING_SECRET", "SLACK_BOT_TOKEN"],
-      detail: "Signed Events API ingress and bot reads are configured.",
+      detail: "Register the signed Events API endpoint, allowlist non-shared pilot channels and verify a real delivery. Credential presence does not verify delivery or bot access.",
     },
     {
       id: "github",
       name: "GitHub",
       category: "Sources" as const,
-      required: ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"],
-      detail: "GitHub App webhook verification and reads are configured.",
+      required: ["GITHUB_WEBHOOK_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_LOGIN"],
+      detail: "Register the signed pull-request webhook and map the selected GitHub App installation/repository. Credential presence does not verify delivery or repository access.",
     },
     {
       id: "auth0",
       name: "Auth0",
       category: "Access" as const,
       required: ["AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "AUTH0_SECRET"],
-      detail: "Application and session configuration are present.",
+      detail: "The optional authenticated inspector is disabled in this MVP. Credentials alone do not enable login, map a user to a tenant or authorize GitHub writes.",
     },
     {
       id: "trigger",
       name: "Trigger.dev",
       category: "Runtime" as const,
       required: ["TRIGGER_PROJECT_REF", "TRIGGER_SECRET_KEY"],
-      detail: "Background task execution configuration is present.",
+      detail: "Deploy the current tasks and configure the worker environment. A verified task run is required; web-server credentials do not prove a worker is running.",
     },
     {
       id: "openrouter",
       name: "OpenRouter",
       category: "Intelligence" as const,
       required: ["OPENROUTER_API_KEY", "OPENROUTER_MODEL"],
-      detail: "The selected Luna model route is configured.",
-    },
-    {
-      id: "upstash",
-      name: "Upstash",
-      category: "Optional" as const,
-      required: ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
-      detail: "Optional Redis configuration is present; it is not required for the MVP observer.",
+      detail: "Configure the selected OpenAI model in the worker environment and verify an analysis run. Credentials do not prove inference succeeded.",
     },
   ];
 
-  return statuses.map((connector) => ({
-    ...connector,
-    status: readiness(env, connector.required),
-  }));
+  return statuses.map((connector) => {
+    const status = readiness(env, connector.required);
+    const missing = connector.required.filter((name) => !env[name as keyof ConnectorEnvironment]?.trim());
+    return {
+      ...connector,
+      status,
+      detail: `${missing.length ? `Missing server configuration: ${missing.join(", ")}.` : "Required names are present on this web server; live verification is pending."} ${connector.detail}`,
+    };
+  });
 }

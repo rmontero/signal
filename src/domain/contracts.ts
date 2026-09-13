@@ -18,6 +18,7 @@ export type PersistedConversationRow = {
   proposalId: string | null;
   proposalState: string | null;
   proposalVersion: number | null;
+  proposalExpiresAt?: Date | null;
   proposalMutation: unknown;
   operationState: string | null;
   operationCreatedAt: Date | null;
@@ -37,6 +38,7 @@ export type PersistedObserverRow = {
   pullRequestNumber: number | null;
   classificationState: "PENDING" | "SIGNAL" | "NOISE" | "BLOCKED";
   classificationReason: string | null;
+  executionState?: string | null;
   createdAt: Date;
 };
 

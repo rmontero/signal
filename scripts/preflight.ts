@@ -19,6 +19,8 @@ export const FULL_CORE_VARIABLES = [
   "SIGNAL_PILOT_CONFIG_PATH",
 ] as const;
 
+// Historical bootstrap lists retained for import compatibility only. The default
+// scope is derived from the names supplied to evaluatePreflight, never this list.
 export const CURRENT_CORE_VARIABLES = [
   "DATABASE_URL",
   "DATABASE_URL_UNPOOLED",
@@ -54,16 +56,26 @@ export type PreflightResult = {
   presentOptional: string[];
 };
 
+function isConfigured(value: string | undefined): boolean {
+  if (typeof value !== "string" || value.trim().length === 0) return false;
+  const normalized = value.trim();
+  // Recognize explicit template markers, not credential formats or validity.
+  // Keep provider values inside this predicate; results contain names only.
+  return !/^(?:undefined|null|unset|placeholder|todo|tbd|(?:change|replace)[-_ ]?me|your[-_ ].+|x{3,})$/i.test(normalized)
+    && !/<[^<>\r\n]+>/.test(normalized)
+    && !/\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(normalized);
+}
+
 export function evaluatePreflight(
   env: NodeJS.ProcessEnv,
   strict = false,
 ): PreflightResult {
-  const required = strict ? FULL_CORE_VARIABLES : CURRENT_CORE_VARIABLES;
-  const optional = strict ? FULL_OPTIONAL_VARIABLES : CURRENT_OPTIONAL_VARIABLES;
-  const isPresent = (name: string) => {
-    const value = env[name];
-    return typeof value === "string" && value.length > 0;
-  };
+  // An explicitly supplied blank/placeholder remains in scope and must be
+  // corrected or unset. Absent future-provider names never block local work.
+  const isSupplied = (name: string) => Object.hasOwn(env, name) && env[name] !== undefined;
+  const required = strict ? FULL_CORE_VARIABLES : FULL_CORE_VARIABLES.filter(isSupplied);
+  const optional = strict ? FULL_OPTIONAL_VARIABLES : FULL_OPTIONAL_VARIABLES.filter(isSupplied);
+  const isPresent = (name: string) => isSupplied(name) && isConfigured(env[name]);
 
   return {
     required,
@@ -82,20 +94,24 @@ if (isMainModule) {
   const result = evaluatePreflight(process.env, strict);
 
   console.log(
-    `Preflight scope: ${strict ? "full roadmap core gate" : "current development variables"}.`,
+    `Preflight scope: ${strict ? "strict release configuration gate" : "currently supplied development variables"}.`,
   );
   console.log(
-    `Preflight configuration: ${result.required.length - result.missingRequired.length}/${result.required.length} required names present.`,
+    `Preflight configuration: ${result.required.length - result.missingRequired.length}/${result.required.length} required names configured (non-empty, no recognized placeholder).`,
   );
-  console.log(`Optional configuration: ${result.presentOptional.length}/${result.optional.length} names present.`);
+  console.log(`Optional configuration: ${result.presentOptional.length}/${result.optional.length} names configured; optional features are not validated or enabled.`);
   console.log("No secret values are displayed.");
+  console.log("Configuration check only. Live integrations, imported pilot mappings, permissions, and release acceptance: NOT RUN.");
 
   if (result.missingRequired.length > 0) {
-    console.error(`Missing required configuration names: ${result.missingRequired.join(", ")}`);
+    console.error(`Missing, blank, or placeholder required configuration names: ${result.missingRequired.join(", ")}`);
     process.exitCode = 1;
   }
 
   if (!strict) {
-    console.log("Full roadmap gate deferred; run `npm run preflight -- --strict` when remaining provider variables are available.");
+    if (result.required.length === 0) {
+      console.log("No core configuration names supplied; local checks may proceed, but provider readiness is not established.");
+    }
+    console.log("Strict release configuration gate deferred; run `npm run preflight -- --strict` for the complete operator checklist.");
   }
 }

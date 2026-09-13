@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createDb } from "../src/db/client";
 import { channelMappings, approvers, identityMappings, tenants } from "../src/db/schema";
 import { readPilotConfig } from "../src/config/pilot";
@@ -9,9 +9,8 @@ export async function importPilot(path: string): Promise<{ tenantId: string; con
   const { db, pool } = createDb(process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL);
   try {
     return await db.transaction(async (tx) => {
-      const existing = await tx.select({ configVersion: tenants.configVersion }).from(tenants).where(eq(tenants.id, config.tenantId)).limit(1);
-      const configVersion = (existing[0]?.configVersion ?? 0) + 1;
-      await tx.insert(tenants).values({ id: config.tenantId, slackTeamId: config.slackTeamId, active: true, configVersion }).onConflictDoUpdate({ target: tenants.id, set: { slackTeamId: config.slackTeamId, active: true, configVersion } });
+      const [versionedTenant] = await tx.insert(tenants).values({ id: config.tenantId, slackTeamId: config.slackTeamId, active: true, configVersion: 1 }).onConflictDoUpdate({ target: tenants.id, set: { slackTeamId: config.slackTeamId, active: true, configVersion: sql`${tenants.configVersion} + 1` } }).returning({ configVersion: tenants.configVersion });
+      const configVersion = versionedTenant.configVersion;
       await tx.update(channelMappings).set({ enabled: false }).where(eq(channelMappings.tenantId, config.tenantId));
       await tx.update(approvers).set({ enabled: false }).where(eq(approvers.tenantId, config.tenantId));
       await tx.update(identityMappings).set({ enabled: false }).where(eq(identityMappings.tenantId, config.tenantId));
@@ -19,7 +18,7 @@ export async function importPilot(path: string): Promise<{ tenantId: string; con
       for (const channel of config.channels) {
         await tx.insert(channelMappings).values({ tenantId: config.tenantId, channelId: channel.channelId, repositoryId: channel.githubRepoId, repositoryOwner: channel.githubOwner, repositoryName: channel.githubRepo, installationId: channel.githubInstallationId, enabled: true, shared: false }).onConflictDoUpdate({ target: [channelMappings.tenantId, channelMappings.channelId], set: { repositoryId: channel.githubRepoId, repositoryOwner: channel.githubOwner, repositoryName: channel.githubRepo, installationId: channel.githubInstallationId, enabled: true, shared: false } });
         for (const slackUserId of channel.approverSlackIds) {
-          await tx.insert(approvers).values({ tenantId: config.tenantId, slackUserId, enabled: true }).onConflictDoUpdate({ target: [approvers.tenantId, approvers.slackUserId], set: { enabled: true } });
+          await tx.insert(approvers).values({ tenantId: config.tenantId, channelId: channel.channelId, slackUserId, enabled: true }).onConflictDoUpdate({ target: [approvers.tenantId, approvers.channelId, approvers.slackUserId], set: { enabled: true } });
           approverCount += 1;
         }
       }

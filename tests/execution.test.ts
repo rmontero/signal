@@ -53,7 +53,7 @@ test("claims an approved issue proposal and sends the exact persisted mutation o
   const calls: unknown[] = [];
   const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
     claimMutation: async (input) => { calls.push(input); return { fencingToken: 4 }; },
-    github: { createIssue: async (input) => { calls.push(input); return { id: "9001", number: 9, url: "https://github.com/acme/signal/issues/9", assignees: [] }; }, addProgressComment: async () => { throw new Error("unexpected comment"); } },
+    github: { createIssue: async ({ signal, ...input }) => { assert.ok(signal instanceof AbortSignal); calls.push(input); return { id: "9001", number: 9, url: "https://github.com/acme/signal/issues/9", assignees: [] }; }, addProgressComment: async () => { throw new Error("unexpected comment"); } },
   }));
 
   assert.equal(result.state, "SUCCEEDED");
@@ -121,7 +121,7 @@ test("revalidates an open issue before sending an exact progress comment", async
   const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-comment" }, dependencies({
     loadApprovedProposal: async () => commentProposal,
     githubRead: { getIssue: async (input) => { read = input; return { id: "9010", number: 10, title: "Release", htmlUrl: "https://github.com/acme/signal/issues/10", state: "open", isPullRequest: false, authorLogin: null }; } },
-    github: { createIssue: async () => { throw new Error("unexpected issue creation"); }, addProgressComment: async (input) => { posted = input; return { id: "comment-1", url: "https://github.com/acme/signal/issues/10#issuecomment-1" }; } },
+    github: { createIssue: async () => { throw new Error("unexpected issue creation"); }, addProgressComment: async ({ signal, ...input }) => { assert.ok(signal instanceof AbortSignal); posted = input; return { id: "9100", url: "https://github.com/acme/signal/issues/10#issuecomment-9100" }; } },
   }));
 
   assert.equal(result.state, "SUCCEEDED");
@@ -164,4 +164,173 @@ test("blocks comment execution without a trustworthy target read and never posts
 
   assert.equal(result.state, "BLOCKED");
   assert.equal(posts, 0);
+});
+
+test("requires exact returned issue identity before persisting success", async () => {
+  for (const change of [
+    { id: "" }, { id: "009001" }, { id: "9007199254740992" }, { number: 0 },
+    { url: "https://github.com/acme/signal/issues/9#issuecomment-1" },
+    { url: "https://github.com/acme/signal/issues/9?other=result" },
+    { url: "https://someone@github.com/acme/signal/issues/9" },
+    { url: "https://github.com:444/acme/signal/issues/9" },
+    { url: "https://github.com/acme//signal/issues/9" },
+  ]) {
+    let posts = 0;
+    let successes = 0;
+    const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
+      github: { createIssue: async () => { posts += 1; return { id: "9001", number: 9, url: "https://github.com/acme/signal/issues/9", assignees: [], ...change }; }, addProgressComment: async () => { throw new Error("unexpected"); } },
+      recordSuccess: async () => { successes += 1; return { jobId: "n" }; },
+    }));
+    assert.equal(result.state, "UNKNOWN");
+    assert.equal(posts, 1);
+    assert.equal(successes, 0);
+  }
+});
+
+test("requires the returned comment ID to match its exact parent and URL fragment", async () => {
+  for (const url of [
+    "https://github.com/acme/signal/issues/10",
+    "https://github.com/acme/signal/issues/10#issuecomment-9101",
+    "https://github.com/acme/signal/issues/11#issuecomment-9100",
+    "https://github.com/acme/signal/issues/10?x=1#issuecomment-9100",
+  ]) {
+    let successes = 0;
+    const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-1" }, dependencies({
+      loadApprovedProposal: async () => ({ ...proposal, operationId: "op-comment", mutation: commentMutation, payloadHash: commentPayloadHash }),
+      githubRead: { getIssue: async () => ({ id: "9010", number: 10, title: "Release", htmlUrl: "https://github.com/acme/signal/issues/10", state: "open", isPullRequest: false, authorLogin: null }) },
+      github: { createIssue: async () => { throw new Error("unexpected"); }, addProgressComment: async () => ({ id: "9100", url }) },
+      recordSuccess: async () => { successes += 1; return { jobId: "n" }; },
+    }));
+    assert.equal(result.state, "UNKNOWN");
+    assert.equal(successes, 0);
+  }
+});
+
+test("withholds a comment when the parent read returns an out-of-scope URL", async () => {
+  let claims = 0;
+  const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-1" }, dependencies({
+    loadApprovedProposal: async () => ({ ...proposal, operationId: "op-comment", mutation: commentMutation, payloadHash: commentPayloadHash }),
+    githubRead: { getIssue: async () => ({ id: "9010", number: 10, title: "Release", htmlUrl: "https://github.com/other/repo/issues/10", state: "open", isPullRequest: false, authorLogin: null }) },
+    claimMutation: async () => { claims += 1; return { fencingToken: 4 }; },
+  }));
+  assert.equal(result.state, "STALE");
+  assert.equal(claims, 0);
+});
+
+test("refuses missing, duplicate, and foreign operation markers even with a matching hash", async () => {
+  for (const body of ["No marker", `${mutation.body}\n<!-- signal-operation:op-1 -->`, `${mutation.body}\n<!-- signal-operation:other -->`]) {
+    const changedMutation = { ...mutation, body };
+    let claims = 0;
+    await assert.rejects(executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
+      loadApprovedProposal: async () => ({ ...proposal, mutation: changedMutation, payloadHash: payloadHash({ schemaVersion: 1, tenantId: "tenant-1", operationId: "op-1", version: 1, mutation: changedMutation }) }),
+      claimMutation: async () => { claims += 1; return { fencingToken: 4 }; },
+    })), (error: unknown) => error instanceof ExecutionError && error.code === "execution_payload_mismatch");
+    assert.equal(claims, 0);
+  }
+});
+
+test("does not normalize persisted bytes into a hash match", async () => {
+  let claims = 0;
+  await assert.rejects(executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
+    loadApprovedProposal: async () => ({ ...proposal, mutation: { ...mutation, title: " Ship release " } }),
+    claimMutation: async () => { claims += 1; return { fencingToken: 4 }; },
+  })), (error: unknown) => error instanceof ExecutionError && error.code === "execution_payload_mismatch");
+  assert.equal(claims, 0);
+});
+
+test("invalid expiry and an expired approval after a slow target read cannot authorize a POST", async () => {
+  await assert.rejects(executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
+    loadApprovedProposal: async () => ({ ...proposal, expiresAt: new Date(NaN) }),
+  })), (error: unknown) => error instanceof ExecutionError && error.code === "execution_stale");
+  let now = new Date("2026-09-12T12:59:59.000Z");
+  let claims = 0;
+  await assert.rejects(executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-comment", attemptId: "attempt-1" }, dependencies({
+    now: () => now,
+    loadApprovedProposal: async () => ({ ...proposal, operationId: "op-comment", mutation: commentMutation, payloadHash: commentPayloadHash }),
+    githubRead: { getIssue: async () => { now = new Date("2026-09-12T13:00:01.000Z"); return { id: "9010", number: 10, title: "Release", htmlUrl: "https://github.com/acme/signal/issues/10", state: "open", isPullRequest: false, authorLogin: null }; } },
+    claimMutation: async () => { claims += 1; return { fencingToken: 4 }; },
+  })), (error: unknown) => error instanceof ExecutionError && error.code === "execution_stale");
+  assert.equal(claims, 0);
+});
+
+test("reports actual assignees and a dropped assignment without repeating creation", async () => {
+  const assignedMutation: Mutation = { ...mutation, assignees: ["alice"] };
+  for (const [assignees, mismatch] of [[[], true], [["bob"], true], [["Alice"], false]] as const) {
+    let saved: Parameters<ExecutionDependencies["recordSuccess"]>[0] | undefined;
+    let posts = 0;
+    const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, dependencies({
+      loadApprovedProposal: async () => ({ ...proposal, mutation: assignedMutation, payloadHash: payloadHash({ schemaVersion: 1, tenantId: "tenant-1", operationId: "op-1", version: 1, mutation: assignedMutation }) }),
+      github: { createIssue: async () => { posts += 1; return { id: "9001", number: 9, url: "https://github.com/acme/signal/issues/9", assignees: [...assignees] }; }, addProgressComment: async () => { throw new Error("unexpected"); } },
+      recordSuccess: async (input) => { saved = input; return { jobId: "n" }; },
+    }));
+    assert.equal(result.state, "SUCCEEDED");
+    assert.deepEqual(saved?.actualAssignees, assignees);
+    assert.equal(saved?.assigneeMismatch, mismatch);
+    assert.deepEqual(result.actualAssignees, assignees);
+    assert.equal(result.assigneeMismatch, mismatch);
+    assert.equal(posts, 1);
+  }
+});
+
+test("a persistence exception after a successful POST is never classified as provider rejection", async () => {
+  for (const persistenceError of [new Error("sensitive database detail"), new GitHubWriteError("github_rejected", "sensitive detail", { outcome: "definite_rejection" })]) {
+    let posts = 0;
+    let claimed = false;
+    const outcomes: string[] = [];
+    const clients = dependencies({
+      claimMutation: async () => { if (claimed) return null; claimed = true; return { fencingToken: 4 }; },
+      github: { createIssue: async () => { posts += 1; return { id: "9001", number: 9, url: "https://github.com/acme/signal/issues/9", assignees: [] }; }, addProgressComment: async () => { throw new Error("unexpected"); } },
+      recordSuccess: async () => { throw persistenceError; },
+      recordFailure: async () => { outcomes.push("FAILED"); },
+      recordUnknown: async () => { outcomes.push("UNKNOWN"); },
+    });
+    await assert.rejects(executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, clients), (error: unknown) => error instanceof ExecutionError && error.code === "execution_persistence_failed" && !error.message.includes("sensitive"));
+    assert.equal((await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-2" }, clients)).state, "IN_PROGRESS");
+    assert.deepEqual(outcomes, []);
+    assert.equal(posts, 1);
+  }
+});
+
+test("duplicate delivery during SENDING and after UNKNOWN never posts again", async () => {
+  let state: "READY" | "SENDING" | "UNKNOWN" = "READY";
+  let posts = 0;
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+  let finishPost!: () => void;
+  const pendingPost = new Promise<void>((resolve) => { finishPost = resolve; });
+  const clients = dependencies({
+    claimMutation: async () => { if (state !== "READY") return null; state = "SENDING"; return { fencingToken: 4 }; },
+    github: { createIssue: async () => { posts += 1; signalStarted(); await pendingPost; throw new GitHubWriteError("github_unknown", "timeout", { outcome: "unknown" }); }, addProgressComment: async () => { throw new Error("unexpected"); } },
+    recordUnknown: async () => { state = "UNKNOWN"; },
+  });
+  const first = executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1" }, clients);
+  await started;
+  assert.equal((await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-2" }, clients)).state, "IN_PROGRESS");
+  finishPost();
+  assert.equal((await first).state, "UNKNOWN");
+  assert.equal((await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-3" }, clients)).state, "IN_PROGRESS");
+  assert.equal(posts, 1);
+});
+
+test("aborts a stalled POST within its lease and records only uncertainty", async () => {
+  let requestSignal: AbortSignal | undefined;
+  let posts = 0;
+  let unknown = 0;
+  const keepAlive = setTimeout(() => undefined, 1_000);
+  try {
+    const result = await executeApprovedProposal({ tenantId: "tenant-1", operationId: "op-1", attemptId: "attempt-1", leaseDurationMs: 20 }, dependencies({
+      github: { createIssue: async ({ signal }) => {
+        posts += 1;
+        requestSignal = signal;
+        if (!signal) throw new Error("deadline absent");
+        await new Promise<void>((resolve) => { if (signal.aborted) resolve(); else signal.addEventListener("abort", () => resolve(), { once: true }); });
+        throw new GitHubWriteError("github_unknown", "timeout", { outcome: "unknown" });
+      }, addProgressComment: async () => { throw new Error("unexpected"); } },
+      recordUnknown: async () => { unknown += 1; },
+    }));
+    assert.equal(result.state, "UNKNOWN");
+    assert.equal(requestSignal?.aborted, true);
+    assert.equal(posts, 1);
+    assert.equal(unknown, 1);
+  } finally { clearTimeout(keepAlive); }
 });

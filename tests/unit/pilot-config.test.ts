@@ -24,3 +24,24 @@ test("pilot config rejects duplicate channel approver and identity entries", () 
 test("pilot config requires at least one named approver per channel", () => {
   assert.throws(() => parsePilotConfig({ ...valid, channels: [{ ...valid.channels[0], approverSlackIds: [] }] }));
 });
+
+test("pilot config rejects absent identity and unknown authority fields", () => {
+  for (const input of [null, [], {}, { ...valid, tenantId: " " }, { ...valid, slackTeamId: "bad-team" }, { ...valid, channels: [] }, { ...valid, admin: true }, { ...valid, channels: [{ ...valid.channels[0], allowAllApprovers: true }] }, { ...valid, identities: [{ ...valid.identities[0], tenantId: "other-tenant" }] }]) {
+    assert.throws(() => parsePilotConfig(input));
+  }
+});
+
+test("pilot channel mapping requires each configured repository and installation coordinate", () => {
+  for (const key of ["channelId", "githubInstallationId", "githubRepoId", "githubOwner", "githubRepo"] as const) {
+    for (const value of [undefined, null, "", " "]) {
+      assert.throws(() => parsePilotConfig({ ...valid, channels: [{ ...valid.channels[0], [key]: value }] }));
+    }
+  }
+});
+
+test("pilot has no implicit Auth0 mapping and scopes repeated approvers to their channels", () => {
+  assert.deepEqual(parsePilotConfig({ ...valid, auth0Subjects: undefined }).auth0Subjects, []);
+  const config = parsePilotConfig({ ...valid, channels: [...valid.channels, { ...valid.channels[0], channelId: "C87654321" }] });
+  assert.equal(config.channels.length, 2);
+  assert.deepEqual(config.channels[0].approverSlackIds, config.channels[1].approverSlackIds);
+});

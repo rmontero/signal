@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   filterConversations,
   getMonitoringMetrics,
@@ -17,7 +18,7 @@ import {
 
 const filterOptions: { label: string; value: ConversationFilter }[] = [
   { label: "Open", value: "open" },
-  { label: "Needs your call", value: "needs-human" },
+  { label: "Needs attention", value: "needs-human" },
   { label: "Everything", value: "all" },
 ];
 
@@ -40,16 +41,10 @@ function initials(name: string): string {
     .toUpperCase();
 }
 
-function statusLabel(status: MonitoredConversation["status"]): string {
-  if (status === "needs-human") return "Needs your call";
-  if (status === "monitoring") return "Monitoring";
-  return "Resolved";
-}
-
 function priorityLabel(priority: MonitoredConversation["priority"]): string {
-  if (priority === "high") return "High signal";
-  if (priority === "medium") return "Worth watching";
-  return "Low signal";
+  if (priority === "high") return "Needs attention";
+  if (priority === "medium") return "Pending";
+  return "Recorded outcome";
 }
 
 function SourceMark({ source }: { source: MonitoredConversation["source"] }) {
@@ -90,13 +85,12 @@ function ConversationCard({
       <h3>{conversation.title}</h3>
       <p>{conversation.summary}</p>
       <div className="conversation-card-footer">
-        <span className={`status status-${conversation.status}`}><span className="status-dot" />{statusLabel(conversation.status)}</span>
-        <span className="activity-time">{conversation.lastActivity}</span>
+        <span className={`status status-${conversation.status}`}><span className="status-dot" />{conversation.signalLabel}</span>
+        <time className="activity-time" dateTime={conversation.activityTimestamp} title="Record created; not the latest state-change time">{conversation.lastActivity}</time>
       </div>
       <div className="conversation-card-meta">
         <span>{conversation.location}</span>
-        <span className="meta-divider" />
-        <AvatarStack participants={conversation.participants} />
+        {conversation.participants.length > 0 && <><span className="meta-divider" /><AvatarStack participants={conversation.participants} /></>}
       </div>
     </button>
   );
@@ -123,7 +117,7 @@ function DetailPanel({ conversation }: { conversation: MonitoredConversation | n
           <div className="detail-kicker"><SourceMark source={conversation.source} /> {sourceLabel(conversation.source)} <span className="detail-separator">/</span> {conversation.location}</div>
           <h2>{conversation.title}</h2>
         </div>
-        <span className={`status status-${conversation.status}`}><span className="status-dot" />{statusLabel(conversation.status)}</span>
+        <span className={`status status-${conversation.status}`}><span className="status-dot" />{conversation.signalLabel}</span>
       </div>
 
       <div className="detail-summary">
@@ -138,16 +132,14 @@ function DetailPanel({ conversation }: { conversation: MonitoredConversation | n
             <p className="callout-label">Where a human adds value</p>
             <p className="callout-question">{conversation.decisionQuestion}</p>
           </div>
-          <button className="text-button" type="button" disabled title="Question dispatch is part of the live listener integration">
-            Ask squad <span aria-hidden="true">↗</span>
-          </button>
+          <span className="action-guidance">Follow up in Slack. This dashboard cannot send requests or approve actions.</span>
         </div>
       )}
 
       <div className="detail-section">
-        <div className="section-heading"><h3>What Signal sees</h3><span className="section-note">Read-only synthesis</span></div>
+        <div className="section-heading"><h3>Recorded state</h3><span className="section-note">Persisted snapshot</span></div>
         <ul className="signal-list">
-          {signals.map((signal) => <li key={signal}><span className="signal-check">✓</span><span>{signal}</span></li>)}
+          {signals.map((signal) => <li key={signal}><span className="signal-check" aria-hidden="true">·</span><span>{signal}</span></li>)}
         </ul>
       </div>
 
@@ -156,7 +148,7 @@ function DetailPanel({ conversation }: { conversation: MonitoredConversation | n
         <div className="evidence-list">
           {conversation.evidence.map((evidence) => (
             evidence.href ? (
-              <a className="evidence-row" href={evidence.href} key={`${evidence.label}-${evidence.detail}`}>
+              <a className="evidence-row" href={evidence.href} key={`${evidence.label}-${evidence.detail}`} target="_blank" rel="noopener noreferrer">
                 <SourceMark source={evidence.source} />
                 <span><strong>{evidence.label}</strong><small>{evidence.detail}</small></span>
                 <span className="evidence-arrow" aria-hidden="true">↗</span>
@@ -173,7 +165,7 @@ function DetailPanel({ conversation }: { conversation: MonitoredConversation | n
       </div>
 
       <div className="detail-section detail-section-last">
-        <div className="section-heading"><h3>Recent activity</h3><span className="section-note">Agent timeline</span></div>
+        <div className="section-heading"><h3>Record history</h3><span className="section-note">Creation timestamps</span></div>
         <div className="activity-list">
           {conversation.activity.map((entry) => (
             <div className="activity-row" key={`${entry.label}-${entry.timestamp}`}>
@@ -249,7 +241,7 @@ function ConversationWorkspace({
   return (
     <section className="monitoring-workspace" id="conversations">
       <div className="conversation-column">
-        <div className="section-title-row"><div><p className="eyebrow">Live queue</p><h2>Open conversations</h2></div><span className="queue-count">{filteredConversations.length} showing</span></div>
+        <div className="section-title-row"><div><p className="eyebrow">Persisted records</p><h2>{filter === "all" ? "All conversations" : filter === "needs-human" ? "Conversations needing attention" : "Open conversations"}</h2></div><span className="queue-count">{filteredConversations.length} showing</span></div>
         <div className="toolbar">
           <div className="filter-tabs" role="group" aria-label="Conversation status">
             {filterOptions.map((option) => <button className={filter === option.value ? "filter-tab filter-tab-active" : "filter-tab"} key={option.value} onClick={() => onFilterChange(option.value)} type="button" aria-pressed={filter === option.value}>{option.label}</button>)}
@@ -260,7 +252,7 @@ function ConversationWorkspace({
           {sourceOptions.map((option) => <button className={source === option.value ? "source-tab source-tab-active" : "source-tab"} key={option.value} onClick={() => onSourceChange(option.value)} type="button" aria-pressed={source === option.value}>{option.label}</button>)}
         </div>
         <div className="conversation-list">
-          {filteredConversations.length ? filteredConversations.map((conversation) => <ConversationCard conversation={conversation} key={conversation.id} onSelect={() => onSelect(conversation.id)} selected={conversation.id === selectedConversation?.id} />) : <div className="list-empty"><span>⌕</span><strong>Nothing here yet</strong><p>Signal will bring a conversation here when it finds a meaningful change.</p></div>}
+          {filteredConversations.length ? filteredConversations.map((conversation) => <ConversationCard conversation={conversation} key={conversation.id} onSelect={() => onSelect(conversation.id)} selected={conversation.id === selectedConversation?.id} />) : <div className="list-empty"><span>⌕</span><strong>No matching records</strong><p>Check the data notice, change the filters or refresh. An empty view does not verify that the feeds are running.</p></div>}
         </div>
       </div>
       <DetailPanel conversation={selectedConversation} />
@@ -284,22 +276,22 @@ function OverviewView({
   return (
     <>
       <section className="page-heading">
-        <div><p className="eyebrow">Executive operating room</p><h1>Know what needs a human.</h1><p className="page-subtitle">Signal surfaces persisted decisions, risks, and owner gaps while keeping the intelligence layer read-only.</p></div>
-        <div className="heading-status"><span className="observer-orbit"><span /></span><div><strong>Passive observer</strong><span>{data.mode === "LIVE" ? "Neon records · feeds pending" : "Slack + GitHub feeds pending"}</span></div></div>
+        <div><p className="eyebrow">Pilot monitoring</p><h1>Know what needs a human.</h1><p className="page-subtitle">Review persisted proposals and passive classifications. Feed health and current worker progress require separate verification.</p></div>
+        <div className="heading-status"><span className="observer-orbit"><span /></span><div><strong>Passive monitoring snapshot</strong><span>{data.mode === "LIVE" ? "Records loaded · feed health unverified" : "Monitoring data unavailable"}</span></div></div>
       </section>
 
       <section className="metric-grid" aria-label="Monitoring summary">
-        <div className="metric-card metric-card-primary"><span className="metric-label">Open conversations</span><strong>{metrics.open}</strong><span className="metric-foot">From persisted tenant records</span><span className="metric-watermark">◌</span></div>
-        <div className="metric-card"><span className="metric-label">Needs your call</span><strong>{metrics.needsHuman}</strong><span className="metric-foot">Human input has leverage</span><span className="metric-spark">▁▃▂▅▃▆</span></div>
-        <div className="metric-card"><span className="metric-label">Signal sources</span><strong>{metrics.slack + metrics.github}</strong><span className="metric-foot"><span className="source-mini source-mini-slack">S</span> Slack <span className="source-mini source-mini-github">⌘</span> GitHub PRs</span></div>
-        <div className="metric-card"><span className="metric-label">Noise filtered</span><strong>{metrics.noiseFiltered}</strong><span className="metric-foot">Observer events filtered from the queue</span><span className="noise-ring noise-ring-empty">·</span></div>
+        <div className="metric-card metric-card-primary"><span className="metric-label">Open records</span><strong>{data.mode === "LIVE" ? metrics.open : "—"}</strong><span className="metric-foot">In this monitoring snapshot</span><span className="metric-watermark">◌</span></div>
+        <div className="metric-card"><span className="metric-label">Needs attention</span><strong>{data.mode === "LIVE" ? metrics.needsHuman : "—"}</strong><span className="metric-foot">Reviews, signals and blockers</span></div>
+        <div className="metric-card"><span className="metric-label">Sources represented</span><strong>{data.mode === "LIVE" ? Number(metrics.slack > 0) + Number(metrics.github > 0) : "—"}</strong><span className="metric-foot"><span className="source-mini source-mini-slack">S</span> Slack <span className="source-mini source-mini-github">⌘</span> GitHub PRs</span></div>
+        <div className="metric-card"><span className="metric-label">Noise filtered</span><strong>{data.mode === "LIVE" ? metrics.noiseFiltered : "—"}</strong><span className="metric-foot">Records classified as noise in this snapshot</span><span className="noise-ring noise-ring-empty">·</span></div>
       </section>
 
       <section className="attention-card">
         <div className="attention-accent" />
         <div className="attention-icon">!</div>
-        <div className="attention-copy"><div className="attention-overline">Top signal · {data.conversations.filter(({ priority }) => priority === "high").length} high-value threads</div><h2>{topDecision?.title ?? "No open decision gaps"}</h2><p>{topDecision?.summary ?? "Signal is monitoring the workspace for meaningful changes."}</p></div>
-        <button className="attention-action" onClick={onDecisionFilter} type="button">See decision gaps <span aria-hidden="true">→</span></button>
+        <div className="attention-copy"><div className="attention-overline">{data.mode === "LIVE" ? `${metrics.needsHuman} records need attention` : "Monitoring status unknown"}</div><h2>{topDecision?.title ?? (data.mode === "LIVE" ? "No attention items in this snapshot" : "Monitoring data is unavailable")}</h2><p>{topDecision?.summary ?? (data.mode === "LIVE" ? "Refresh for the latest persisted records. Feed health is not verified by this view." : "Open Settings for pilot setup requirements and check the data notice above.")}</p></div>
+        <button className="attention-action" onClick={onDecisionFilter} type="button">See attention items <span aria-hidden="true">→</span></button>
       </section>
 
       {conversationWorkspace}
@@ -315,24 +307,24 @@ function DecisionsView({ conversations, onOpenConversation }: { conversations: M
   const decisions = conversations.filter(({ status }) => status === "needs-human");
   return (
     <section className="workspace-section" id="decisions">
-      <div className="section-title-row"><div><p className="eyebrow">Human leverage</p><h2>Decisions needing your call</h2></div><span className="queue-count">{decisions.length} open</span></div>
-      {decisions.length ? <div className="decision-grid">{decisions.map((conversation) => <button className="decision-card" key={conversation.id} onClick={() => onOpenConversation(conversation.id)} type="button"><div className="decision-card-topline"><SourceMark source={conversation.source} /><span>{conversation.signalLabel}</span><span className="priority priority-high"><span className="priority-dot" />High signal</span></div><h3>{conversation.title}</h3><p>{conversation.decisionQuestion ?? conversation.summary}</p><span className="decision-card-action">Open conversation ↗</span></button>)}</div> : <EmptySection icon="◇" title="No decisions waiting" detail="When a persisted proposal needs an authorized human decision, it will appear here." />}
+      <div className="section-title-row"><div><p className="eyebrow">Human review</p><h2>Decisions and blockers</h2></div><span className="queue-count">{decisions.length} in this snapshot</span></div>
+      {decisions.length ? <div className="decision-grid">{decisions.map((conversation) => <button className="decision-card" key={conversation.id} onClick={() => onOpenConversation(conversation.id)} type="button"><div className="decision-card-topline"><SourceMark source={conversation.source} /><span>{conversation.signalLabel}</span><span className="priority priority-high"><span className="priority-dot" />Needs attention</span></div><h3>{conversation.title}</h3><p>{conversation.decisionQuestion ?? conversation.summary}</p><span className="decision-card-action">Open conversation ↗</span></button>)}</div> : <EmptySection icon="◇" title="No attention items loaded" detail="No matching records are available in this snapshot. Check the data notice and refresh before concluding that nothing needs attention." />}
     </section>
   );
 }
 
 function ActivityView({ conversations }: { conversations: MonitoredConversation[] }) {
-  const activity = conversations.flatMap((conversation) => conversation.activity.map((entry) => ({ ...entry, conversationTitle: conversation.title })));
+  const activity = [...conversations].sort((a, b) => b.activityTimestamp.localeCompare(a.activityTimestamp)).flatMap((conversation) => conversation.activity.map((entry, index) => ({ ...entry, id: `${conversation.id}:${index}`, conversationTitle: conversation.title })));
   return (
     <section className="workspace-section" id="activity">
       <div className="section-title-row"><div><p className="eyebrow">Observer timeline</p><h2>Recent activity</h2></div><span className="queue-count">{activity.length} events</span></div>
-      {activity.length ? <div className="activity-feed">{activity.map((entry) => <div className="activity-feed-row" key={`${entry.conversationTitle}-${entry.label}-${entry.timestamp}`}><SourceMark source={entry.source} /><div><strong>{entry.label}</strong><span>{entry.conversationTitle}</span><small>{entry.detail}</small></div><time>{entry.timestamp}</time></div>)}</div> : <EmptySection icon="↗" title="No activity yet" detail="Persisted observer events will appear here as Slack and GitHub conversations are ingested." />}
+      {activity.length ? <div className="activity-feed">{activity.map((entry) => <div className="activity-feed-row" key={entry.id}><SourceMark source={entry.source} /><div><strong>{entry.label}</strong><span>{entry.conversationTitle}</span><small>{entry.detail}</small></div><time>{entry.timestamp}</time></div>)}</div> : <EmptySection icon="↗" title="No activity loaded" detail="No record history is available in this snapshot. Check the data notice and refresh to load newly persisted events." />}
     </section>
   );
 }
 
 function connectorStatusLabel(status: ConnectorSummary["status"]): string {
-  if (status === "ready") return "Ready";
+  if (status === "ready") return "Configured · unverified";
   if (status === "needs-config") return "Needs configuration";
   return "Not configured";
 }
@@ -342,8 +334,8 @@ function ConnectorCard({ connector, expanded, onToggle }: { connector: Connector
     <article className={`connector-card connector-card-${connector.status}`}>
       <div className="connector-card-header"><div className={`connector-logo connector-logo-${connector.id}`}>{connector.id === "github" ? "⌘" : connector.name.slice(0, 1)}</div><div className="connector-card-title"><span>{connector.category}</span><h3>{connector.name}</h3></div><span className={`connector-status connector-status-${connector.status}`}><span className="status-dot" />{connectorStatusLabel(connector.status)}</span></div>
       <p>{connector.detail}</p>
-      <div className="connector-card-footer"><span>{connector.required.length} server-only values</span><button className="connector-action" onClick={onToggle} type="button" aria-expanded={expanded}>{expanded ? "Hide details" : connector.status === "ready" ? "Review setup" : "Configure"}</button></div>
-      {expanded && <div className="connector-requirements"><strong>Required names</strong><div>{connector.required.map((name) => <code key={name}>{name}</code>)}</div><small>Values are never displayed in the dashboard.</small></div>}
+      <div className="connector-card-footer"><span>{connector.required.length} configuration names</span><button className="connector-action" onClick={onToggle} type="button" aria-expanded={expanded} aria-controls={`setup-${connector.id}`}>{expanded ? "Hide details" : "View setup requirements"}</button></div>
+      {expanded && <div className="connector-requirements" id={`setup-${connector.id}`}><strong>Required names</strong><div>{connector.required.map((name) => <code key={name}>{name}</code>)}</div><small>An operator must update the server or worker environment and verify the integration. This panel cannot save settings, connect accounts or grant permissions.</small></div>}
     </article>
   );
 }
@@ -352,10 +344,10 @@ function SourcesView({ connectors, onOpenSettings }: { connectors: ConnectorSumm
   const sourceConnectors = connectors.filter(({ id }) => id === "slack" || id === "github");
   return (
     <section className="workspace-section" id="sources">
-      <div className="section-title-row"><div><p className="eyebrow">Passive inputs</p><h2>Sources</h2></div><span className="queue-count">{sourceConnectors.filter(({ status }) => status === "ready").length}/{sourceConnectors.length} ready</span></div>
-      <p className="section-intro">Slack Events API and GitHub pull-request webhooks are the two observer feeds. Deterministic filters and the Luna classifier run after verified events are persisted.</p>
+      <div className="section-title-row"><div><p className="eyebrow">Passive inputs</p><h2>Sources</h2></div><span className="queue-count">Feed health unverified</span></div>
+      <p className="section-intro">Slack Events API and GitHub pull-request webhooks are the pilot sources. The configuration checks below do not prove event delivery or classification. Review the recorded event states and verify the worker separately.</p>
       <div className="source-grid">{sourceConnectors.map((connector) => <div className="source-overview-card" key={connector.id}><div className={`connector-logo connector-logo-${connector.id}`}>{connector.id === "github" ? "⌘" : connector.name.slice(0, 1)}</div><div><span className="source-overview-category">{connector.category}</span><h3>{connector.name}</h3><p>{connector.detail}</p></div><span className={`connector-status connector-status-${connector.status}`}>{connectorStatusLabel(connector.status)}</span></div>)}</div>
-      <button className="secondary-action" onClick={onOpenSettings} type="button">Manage connector configuration <span aria-hidden="true">→</span></button>
+      <button className="secondary-action" onClick={onOpenSettings} type="button">View setup requirements <span aria-hidden="true">→</span></button>
     </section>
   );
 }
@@ -365,15 +357,17 @@ function SettingsView({ connectors }: { connectors: ConnectorSummary[] }) {
   const ready = connectors.filter(({ status }) => status === "ready").length;
   return (
     <section className="workspace-section settings-section" id="settings">
-      <div className="section-title-row"><div><p className="eyebrow">Workspace controls</p><h2>Settings</h2></div><span className="queue-count">{ready}/{connectors.length} connectors ready</span></div>
-      <div className="settings-callout"><div className="settings-callout-icon">⚙</div><div><strong>Server-side connector configuration</strong><p>Signal only reports whether required names are present. Secrets stay in the server environment and are never sent to the browser.</p></div></div>
+      <div className="section-title-row"><div><p className="eyebrow">Pilot setup</p><h2>Settings</h2></div><span className="queue-count">{ready}/{connectors.length} have required names</span></div>
+      <div className="settings-callout"><div className="settings-callout-icon">⚙</div><div><strong>Read-only setup information</strong><p>This page reports required names in the web-server environment. It cannot change configuration, connect providers or verify the worker environment. An operator must import the pilot mappings, configure providers and verify actual delivery. Refresh the dashboard after setup.</p></div></div>
       <div className="connector-grid">{connectors.map((connector) => <ConnectorCard connector={connector} expanded={expandedId === connector.id} key={connector.id} onToggle={() => setExpandedId(expandedId === connector.id ? null : connector.id)} />)}</div>
-      <div className="settings-boundaries"><strong>Runtime boundaries</strong><span>Trigger.dev runs background work</span><span>OpenRouter is the only model route</span><span>GitHub writes remain limited to approved actions</span><span>Dashboard access is tenant-scoped</span></div>
+      <div className="settings-boundaries"><strong>Runtime boundaries</strong><span>Trigger.dev is the background runtime</span><span>OpenRouter is the only model route</span><span>Named Slack approval is required for GitHub actions</span><span>The server selects one configured pilot; no dashboard sign-in is enabled</span></div>
     </section>
   );
 }
 
 export function MonitoringDashboard({ data }: { data: MonitoringDashboardData }) {
+  const router = useRouter();
+  const [refreshing, startRefresh] = useTransition();
   const [filter, setFilter] = useState<ConversationFilter>("open");
   const [source, setSource] = useState<SourceFilter>("all");
   const [query, setQuery] = useState("");
@@ -390,15 +384,22 @@ export function MonitoringDashboard({ data }: { data: MonitoringDashboardData })
     const syncSection = () => setSection(dashboardSectionFromHash(window.location.hash));
     syncSection();
     window.addEventListener("hashchange", syncSection);
-    return () => window.removeEventListener("hashchange", syncSection);
+    window.addEventListener("popstate", syncSection);
+    return () => {
+      window.removeEventListener("hashchange", syncSection);
+      window.removeEventListener("popstate", syncSection);
+    };
   }, []);
 
   function navigate(nextSection: DashboardSection) {
     setSection(nextSection);
-    window.history.pushState({}, "", `#${nextSection}`);
+    if (window.location.hash !== `#${nextSection}`) window.history.pushState({}, "", `#${nextSection}`);
   }
 
   function openConversation(id: string) {
+    setFilter("all");
+    setSource("all");
+    setQuery("");
     setSelectedId(id);
     navigate("conversations");
   }
@@ -425,11 +426,11 @@ export function MonitoringDashboard({ data }: { data: MonitoringDashboardData })
           <div><strong>Signal</strong><span>Conversation intelligence</span></div>
         </div>
 
-        <div className="workspace-switcher">
+        <button className="workspace-switcher" type="button" onClick={() => navigate("settings")} aria-label="View pilot setup">
           <span className="workspace-avatar">S</span>
-          <span><strong>Signal workspace</strong><small>{data.mode === "LIVE" ? "Tenant-scoped view" : "Awaiting tenant context"}</small></span>
-          <span className="workspace-chevron">⌄</span>
-        </div>
+          <span><strong>Signal pilot</strong><small>{data.mode === "LIVE" ? "Server-selected workspace" : "Setup needs verification"}</small></span>
+          <span className="workspace-chevron" aria-hidden="true">⚙</span>
+        </button>
 
         <nav className="primary-nav" aria-label="Primary navigation">
           {sidebarItems.map((item) => <SidebarNavItem active={section === item.value} count={item.value === "conversations" ? metrics.open : item.value === "decisions" ? metrics.needsHuman : undefined} item={item} key={item.value} onNavigate={navigate} />)}
@@ -442,22 +443,22 @@ export function MonitoringDashboard({ data }: { data: MonitoringDashboardData })
         </nav>
 
         <div className="sidebar-footer">
-          <div className="observer-state"><span className={`live-dot${data.mode === "LIVE" ? "" : " live-dot-muted"}`} /><span><strong>{data.mode === "LIVE" ? "Neon connected" : "Live data unavailable"}</strong><small>{data.mode === "LIVE" ? "Tenant-scoped records" : "Server configuration required"}</small></span></div>
-          <div className="user-row"><span className="user-avatar">R</span><span><strong>Rob</strong><small>Decision maker</small></span><span className="user-more">•••</span></div>
+          <div className="observer-state"><span className="live-dot live-dot-muted" /><span><strong>{data.mode === "LIVE" ? "Snapshot loaded" : "Data unavailable"}</strong><small>Feed health unverified</small></span></div>
+          <div className="user-row"><span className="user-avatar" aria-hidden="true">S</span><span><strong>Pilot dashboard</strong><small>Read-only · Approvals in Slack</small></span></div>
         </div>
       </aside>
 
       <main className="dashboard-main">
         <header className="topbar">
           <div className="breadcrumb"><span>Workspace</span><span>/</span><strong>{section[0].toUpperCase() + section.slice(1)}</strong></div>
-          <div className="topbar-actions"><span className="last-updated"><span className="refresh-icon">↻</span> {data.mode === "LIVE" ? "Loaded from Neon" : "Awaiting live data"}</span><button className="help-button" type="button" aria-label="Help">?</button><button className="top-avatar" type="button" aria-label="Open profile">R</button></div>
+          <div className="topbar-actions"><span className="last-updated">{data.mode === "LIVE" && data.loadedAt ? `Snapshot ${data.loadedAt.replace("T", " ").slice(0, 19)} UTC` : "No current snapshot"}</span><button className="refresh-button" type="button" disabled={refreshing} onClick={() => startRefresh(() => router.refresh())}>{refreshing ? "Refreshing…" : "Refresh records"}</button><button className="help-button" type="button" aria-label="Setup help" onClick={() => navigate("settings")}>?</button><button className="top-avatar" type="button" aria-label="Open settings" onClick={() => navigate("settings")}>⚙</button></div>
         </header>
 
         <div className="dashboard-content">
-          <div className={`preview-banner${data.mode === "LIVE" ? " live-banner" : " unavailable-banner"}`}><span className="preview-pulse" /><span><strong>{data.mode === "LIVE" ? "Live data" : "Live data unavailable"}</strong> {data.notice}</span><span className="banner-model">OpenRouter · Luna 5.6</span></div>
+          <div className={`preview-banner${data.mode === "LIVE" ? " live-banner" : " unavailable-banner"}`} role="status"><span><strong>{data.mode === "LIVE" ? "Persisted snapshot" : "Data unavailable"}</strong> {data.notice}</span><span className="banner-model">Read-only monitoring</span></div>
 
-          <div className="section-view" id={section}>
-            {section === "overview" && <OverviewView data={data} metrics={metrics} onDecisionFilter={() => { setFilter("needs-human"); navigate("conversations"); }} conversationWorkspace={conversationWorkspace} />}
+          <div className="section-view">
+            {section === "overview" && <OverviewView data={data} metrics={metrics} onDecisionFilter={() => navigate("decisions")} conversationWorkspace={conversationWorkspace} />}
             {section === "conversations" && conversationWorkspace}
             {section === "decisions" && <DecisionsView conversations={data.conversations} onOpenConversation={openConversation} />}
             {section === "activity" && <ActivityView conversations={data.conversations} />}
@@ -465,7 +466,7 @@ export function MonitoringDashboard({ data }: { data: MonitoringDashboardData })
             {section === "settings" && <SettingsView connectors={data.connectors} />}
           </div>
 
-          <footer className="dashboard-footer"><span><span className="footer-check">✓</span> Read-only intelligence layer</span><span>Tenant scoped · No automatic writes</span><span className="footer-model">Model <strong>openai/gpt-5.6-luna</strong></span></footer>
+          <footer className="dashboard-footer"><span>Read-only monitoring</span><span>Server-configured pilot · Snapshot may be outdated</span><span>GitHub approvals happen in Slack</span></footer>
         </div>
       </main>
     </div>

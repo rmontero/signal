@@ -12,6 +12,20 @@ Manual resolution records the operation UUID, tenant, action, payload hash, obse
 
 ## Data and security
 
+### Durable job recovery
+
+Business tasks claim a tenant/job/run-bound execution lease and fencing token before provider work, with one Trigger attempt per run. A completed or blocked job cannot be dispatched again. Recovery examines the recorded Trigger run and requires verified finality plus the exhausted execution lease before advancing a safe retry generation (at most three). The retry uses the same durable job with a generation-specific global key and backoff. Enqueue timeout means uncertain acceptance; the SDK request is not proven cancelled. Database ownership still fences any duplicate run.
+
+GitHub `SENDING`/`UNKNOWN` recovery queues read-back only and preserves the original execution identity. A missing marker never creates a retry generation for a mutation. Result notifications load the exact proposal's persisted Slack message, not the thread's latest message, and update that message only. An initial proposal post moves `PENDING → SENDING → SENT`; uncertain acknowledgement or a crash in `SENDING` leaves `UNKNOWN` and requires manual investigation, never automatic posting again. No operator should reset this state based merely on an absent acknowledgement.
+
+### Migration gate
+
+Run `npm run test:migrations` and `npm run test:integration` before applying pending migrations to application tables. Existing unscoped approvers, missing approval modal references, and duplicate thread/version records require operator reconciliation; migrations intentionally fail instead of inventing grants or rewriting immutable versions. Historical proposals with unknown configuration provenance receive config version `0` and cannot approve or execute. Capture the current locked positive tenant version for every new draft. A corrected historical migration file is not automatically rerun on databases that already journaled it; audit deployed constraints explicitly.
+
+### Dashboard access
+
+A configured `SIGNAL_DASHBOARD_TENANT_ID` is pilot selection, not viewer authorization. The public setup shell must not load private Slack/GitHub records without a verified server session and subject-to-tenant mapping. Optional Auth0 remaining disabled does not create a public-data exception. Live viewer admission and refresh require their own verification before enabling private dashboard data.
+
 Do not log source text, prompts, complete task payloads, credentials, callback bodies, or tokens. Use IDs, hashes, durations, and small status values. Retain source snapshots for at most 24 hours and proposal bodies for 7 days, then delete them with a verified cleanup job. Provider retention is separate and must be documented. Tenant context is explicit on every lookup and is rechecked at execution; a missing or mismatched tenant fails closed.
 
 Treat Slack callbacks, browser inputs, retrieval results, and model output as untrusted. Verify signatures, actor, channel, tenant, proposal version, payload hash, and expiry at approval time. The model cannot own an approval transition or GitHub write. Only `CREATE_ISSUE` and `ADD_PROGRESS_COMMENT` are permitted. No issue patch, closure, merge, deployment, label creation, or silent owner guessing is an operational fallback.

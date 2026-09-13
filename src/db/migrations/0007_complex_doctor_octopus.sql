@@ -1,0 +1,2 @@
+ALTER TABLE "approvals" ALTER COLUMN "modal_id" SET NOT NULL;--> statement-breakpoint
+ALTER TABLE "approvals" ADD CONSTRAINT "approvals_review_fk" FOREIGN KEY ("tenant_id","proposal_id","modal_id") REFERENCES "public"."slack_reviews"("tenant_id","proposal_id","modal_id") ON DELETE no action ON UPDATE no action;

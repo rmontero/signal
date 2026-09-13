@@ -1,0 +1,1 @@
+ALTER TABLE "proposals" ALTER COLUMN "config_version" SET DEFAULT 0;

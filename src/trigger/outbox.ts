@@ -12,7 +12,7 @@ export async function dispatchStoredOutboxJob(
   const claim = await claimOutboxDispatch(db, input);
   if (!claim) return false;
   try {
-    const result = await dispatch(input);
+    const result = await dispatch({ ...input, retryGeneration: claim.retryGeneration });
     if (!result.dispatched || !result.triggerRunId) {
       await releaseOutboxDispatch(db, claim);
       return false;

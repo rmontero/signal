@@ -156,6 +156,9 @@ a {
   border: 1px solid rgba(177, 225, 218, 0.15);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .workspace-avatar,
@@ -200,6 +203,7 @@ a {
   padding: 0 12px;
   border-radius: 9px;
   color: #9dc1bd;
+  background: transparent;
   font-size: 12px;
   cursor: pointer;
   text-align: left;
@@ -370,6 +374,28 @@ a {
   background: #317b75;
   font-size: 10px;
   font-weight: 800;
+}
+
+.refresh-button {
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--teal-dark);
+  background: var(--paper);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.action-guidance {
+  max-width: 190px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .dashboard-content {
@@ -1589,11 +1615,11 @@ a {
 }
 
 .connector-status-ready {
-  color: #438979;
+  color: #697a83;
 }
 
 .connector-status-ready .status-dot {
-  background: #55aa91;
+  background: #8798a0;
 }
 
 .connector-status-needs-config {

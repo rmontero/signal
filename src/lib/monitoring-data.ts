@@ -1,46 +1,67 @@
+import { and, eq } from "drizzle-orm";
 import { createDb } from "../db/client";
 import { listMonitoringConversations, listObservedConversations } from "../db/repositories";
+import { channelMappings, tenants } from "../db/schema";
 import { getConnectorStatuses, type ConnectorEnvironment } from "./dashboard-settings";
 import { mapObservedConversation, mapPersistedConversation, type MonitoringDashboardData } from "./monitoring";
 
-export async function loadMonitoringDashboardData(): Promise<MonitoringDashboardData> {
+type PilotMapping = Pick<typeof channelMappings.$inferSelect, "channelId" | "repositoryId" | "repositoryOwner" | "repositoryName">;
+
+async function loadConfiguredPilot(db: ReturnType<typeof createDb>["db"], tenantId: string): Promise<PilotMapping[] | null> {
+  const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(and(eq(tenants.id, tenantId), eq(tenants.active, true))).limit(1);
+  if (!tenant) return null;
+  return db.select({ channelId: channelMappings.channelId, repositoryId: channelMappings.repositoryId, repositoryOwner: channelMappings.repositoryOwner, repositoryName: channelMappings.repositoryName })
+    .from(channelMappings).where(and(eq(channelMappings.tenantId, tenantId), eq(channelMappings.enabled, true), eq(channelMappings.shared, false)));
+}
+
+const defaultDependencies = {
+  createDb,
+  loadConfiguredPilot,
+  listMonitoringConversations,
+  listObservedConversations,
+};
+
+// Dependencies support isolated tests; tenant identity always comes from the server environment.
+export async function loadMonitoringDashboardData(dependencies = defaultDependencies): Promise<MonitoringDashboardData> {
   const connectors = getConnectorStatuses(process.env as ConnectorEnvironment);
   const tenantId = process.env.SIGNAL_DASHBOARD_TENANT_ID?.trim();
+  const unavailable = (notice: string): MonitoringDashboardData => ({ mode: "UNAVAILABLE", notice, conversations: [], connectors });
   if (!tenantId) {
-    return {
-      mode: "UNAVAILABLE",
-      notice: "Live data is unavailable until SIGNAL_DASHBOARD_TENANT_ID is configured on the server.",
-      conversations: [],
-      connectors,
-    };
+    return unavailable("Configure SIGNAL_DASHBOARD_TENANT_ID on the server to select the pilot. No monitoring records have been loaded.");
   }
 
-  if (!process.env.DATABASE_URL) {
-    return {
-      mode: "UNAVAILABLE",
-      notice: "Live data is unavailable until the Neon DATABASE_URL is configured on the server.",
-      conversations: [],
-      connectors,
-    };
+  if (!process.env.DATABASE_URL?.trim()) {
+    return unavailable("Configure the Neon DATABASE_URL on the server. No monitoring records have been loaded.");
   }
 
-  const { db, pool } = createDb();
+  let connection: ReturnType<typeof createDb> | undefined;
   try {
-    const [rows, observedRows] = await Promise.all([listMonitoringConversations(db, tenantId), listObservedConversations(db, tenantId)]);
+    connection = dependencies.createDb();
+    const { db } = connection;
+    const mappings = await dependencies.loadConfiguredPilot(db, tenantId);
+    if (!mappings) return unavailable("The server-selected pilot tenant is missing or inactive. An operator must verify the pilot configuration.");
+    if (!mappings.length) return unavailable("The selected pilot has no enabled, non-shared channel/repository mappings. An operator must import the pilot configuration before monitoring can be shown.");
+    const [rows, observedRows] = await Promise.all([dependencies.listMonitoringConversations(db, tenantId), dependencies.listObservedConversations(db, tenantId)]);
+    if ([...rows, ...observedRows].some((row) => row.tenantId !== tenantId)) return unavailable("The monitoring snapshot could not be verified for the configured pilot. An operator must inspect the server data scope.");
+    const conversations = [
+      ...rows.filter((row) => mappings.some((mapping) => mapping.channelId === row.channelId && mapping.repositoryOwner === row.repositoryOwner && mapping.repositoryName === row.repositoryName)).map((row) => mapPersistedConversation(row)),
+      ...observedRows.filter((row) => mappings.some((mapping) => row.source === "slack"
+        ? mapping.channelId === row.channelId
+        : mapping.repositoryId === row.repositoryId && mapping.repositoryOwner === row.repositoryOwner && mapping.repositoryName === row.repositoryName)).map(mapObservedConversation),
+    ].sort((a, b) => b.activityTimestamp.localeCompare(a.activityTimestamp) || a.id.localeCompare(b.id));
     return {
       mode: "LIVE",
-      notice: "Showing tenant-scoped conversations and observer events persisted in Neon. Classification is read-only until a human acts.",
-      conversations: [...rows.map(mapPersistedConversation), ...observedRows.map(mapObservedConversation)],
+      loadedAt: new Date().toISOString(),
+      notice: conversations.length
+        ? "Showing persisted records for the server-configured pilot. This snapshot does not verify current feed health. Refresh to check for changes. GitHub actions still require named Slack approval."
+        : "The configured pilot was read successfully, but no monitoring records are available. Feed delivery and worker execution are not verified by this empty snapshot.",
+      conversations,
       connectors,
     };
   } catch {
-    return {
-      mode: "UNAVAILABLE",
-      notice: "Live data could not be loaded from Neon. Check the server configuration and database connectivity.",
-      conversations: [],
-      connectors,
-    };
+    return unavailable("Monitoring records could not be loaded. Check the server's database configuration, schema and connectivity; feed health is unknown.");
   } finally {
-    await pool.end();
+    // Cleanup failures must not expose connection strings or replace the sanitized result.
+    if (connection) await connection.pool.end().catch(() => undefined);
   }
 }

@@ -90,6 +90,10 @@ Reconciliation checks the exact configured repository and issue/comment identity
 
 ## HTTP and authority
 
+Execution lifecycle addendum: outbox execution claims bind tenant/job/task, recorded Trigger run, fencing token and a five-minute execution lease. The business task has a four-minute runtime ceiling and no automatic SDK task retry. Terminal unsuccessful or never-started runs may advance a bounded retry generation only after the execution lease is exhausted and the original run is verified terminal. `SENDING`/`UNKNOWN` GitHub operations never enter that replay path; only reconciliation is queued. Proposal notification state and message timestamp belong to the exact proposal. Result updates use that immutable proposal destination and persist returned assignee evidence.
+
+Approval rows require the persisted modal ID through a composite tenant/proposal/modal foreign key. New proposals capture the locked tenant configuration version. Approval and mutation claim atomically recheck active tenant, exact enabled/non-shared channel mapping, channel-scoped named actor, persisted modal/binding, raw payload hash and database-clock expiry; configuration changes invalidate the proposal. Legacy unknown configuration provenance is version `0`, never silently backfilled authority.
+
 | Route | Behavior and errors |
 |---|---|
 | `POST /api/slack/events` | Verify raw-body Slack HMAC and timestamp (five-minute tolerance) before parsing; signed URL challenge returns 200. Accepted/duplicate events return 200, ignored events return 202; durable insert failure returns 503; bad signature 401; malformed payload 400 |

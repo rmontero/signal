@@ -20,8 +20,8 @@ export const channelMappings = pgTable("channel_mappings", {
 ]);
 
 export const approvers = pgTable("approvers", {
-  tenantId: text("tenant_id").notNull(), slackUserId: text("slack_user_id").notNull(), enabled: boolean("enabled").default(true).notNull(), createdAt: createdAt(),
-}, (table) => [primaryKey({ columns: [table.tenantId, table.slackUserId] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "approvers_tenant_fk" })]);
+  tenantId: text("tenant_id").notNull(), channelId: text("channel_id").notNull(), slackUserId: text("slack_user_id").notNull(), enabled: boolean("enabled").default(true).notNull(), createdAt: createdAt(),
+}, (table) => [primaryKey({ columns: [table.tenantId, table.channelId, table.slackUserId] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "approvers_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.channelId], foreignColumns: [channelMappings.tenantId, channelMappings.channelId], name: "approvers_channel_fk" })]);
 
 export const identityMappings = pgTable("identity_mappings", {
   tenantId: text("tenant_id").notNull(), slackUserId: text("slack_user_id").notNull(), githubLogin: text("github_login").notNull(), enabled: boolean("enabled").default(true).notNull(), createdAt: createdAt(),
@@ -58,9 +58,10 @@ export const proposals = pgTable("proposals", {
   tenantId: text("tenant_id").notNull(), id: id(), threadId: text("thread_id").notNull(), snapshotId: text("snapshot_id").notNull(), operationId: text("operation_id").notNull(),
   version: integer("version").notNull(), mutation: jsonb("mutation").notNull(), payloadHash: text("payload_hash").notNull(), actionFingerprint: text("action_fingerprint").notNull(),
   state: text("state").notNull().default("PENDING"), expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(), createdAt: createdAt(),
+  notificationMessageTs: text("notification_message_ts"), notificationState: text("notification_state").notNull().default("PENDING"), analysis: jsonb("analysis"), configVersion: integer("config_version").notNull().default(0),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), unique("proposals_fingerprint_unique").on(table.tenantId, table.actionFingerprint), unique("proposals_operation_unique").on(table.tenantId, table.operationId),
-  check("proposals_state_check", sql`${table.state} in ('PENDING','APPROVED','DISMISSED','SUPERSEDED','EXPIRED')`), uniqueIndex("proposals_active_thread_unique").on(table.tenantId, table.threadId).where(sql`${table.state} in ('PENDING','APPROVED')`),
+  check("proposals_state_check", sql`${table.state} in ('PENDING','APPROVED','DISMISSED','SUPERSEDED','EXPIRED')`), check("proposals_notification_state_check", sql`${table.notificationState} in ('PENDING','SENDING','SENT','UNKNOWN')`), uniqueIndex("proposals_active_thread_unique").on(table.tenantId, table.threadId).where(sql`${table.state} = 'PENDING'`), unique("proposals_thread_version_unique").on(table.tenantId, table.threadId, table.version),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "proposals_tenant_fk" }),
   foreignKey({ columns: [table.tenantId, table.threadId], foreignColumns: [threads.tenantId, threads.id], name: "proposals_thread_fk" }),
   foreignKey({ columns: [table.tenantId, table.snapshotId], foreignColumns: [snapshots.tenantId, snapshots.id], name: "proposals_snapshot_fk" }),
@@ -68,16 +69,18 @@ export const proposals = pgTable("proposals", {
 
 export const operations = pgTable("operations", {
   tenantId: text("tenant_id").notNull(), id: id(), proposalId: text("proposal_id").notNull(), state: text("state").notNull().default("READY"), fencingToken: integer("fencing_token").default(0).notNull(),
-  ownerAttemptId: text("owner_attempt_id"), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }), resultExternalId: text("result_external_id"), resultExternalUrl: text("result_external_url"), errorCode: text("error_code"), resolutionNote: text("resolution_note"), createdAt: createdAt(),
+  ownerAttemptId: text("owner_attempt_id"), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }), resultExternalId: text("result_external_id"), resultExternalUrl: text("result_external_url"), resultAssignees: jsonb("result_assignees"), assigneeMismatch: boolean("assignee_mismatch"), errorCode: text("error_code"), resolutionNote: text("resolution_note"), createdAt: createdAt(),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), unique("operations_proposal_unique").on(table.tenantId, table.proposalId), unique("operations_identity_unique").on(table.tenantId, table.id, table.proposalId), check("operations_state_check", sql`${table.state} in ('READY','SENDING','SUCCEEDED','FAILED','UNKNOWN','STALE')`),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "operations_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "operations_proposal_fk" }),
 ]);
 
 export const approvals = pgTable("approvals", {
+  modalId: text("modal_id").notNull(),
   tenantId: text("tenant_id").notNull(), id: id(), proposalId: text("proposal_id").notNull(), operationId: text("operation_id").notNull(), version: integer("version").notNull(), payloadHash: text("payload_hash").notNull(), expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(), slackTeamId: text("slack_team_id").notNull(), channelId: text("channel_id").notNull(), actorSlackId: text("actor_slack_id").notNull(), approvedAt: timestamp("approved_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), unique("approvals_proposal_unique").on(table.tenantId, table.proposalId),
+  foreignKey({ columns: [table.tenantId, table.proposalId, table.modalId], foreignColumns: [slackReviews.tenantId, slackReviews.proposalId, slackReviews.modalId], name: "approvals_review_fk" }),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "approvals_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "approvals_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId, table.proposalId], foreignColumns: [operations.tenantId, operations.id, operations.proposalId], name: "approvals_operation_fk" }),
 ]);
 
@@ -101,6 +104,7 @@ export const observedEvents = pgTable("observed_events", {
 
 export const outbox = pgTable("outbox", {
   tenantId: text("tenant_id").notNull(), id: id(), taskId: text("task_id").notNull(), inboxId: text("inbox_id"), proposalId: text("proposal_id"), operationId: text("operation_id"), observerEventId: text("observer_event_id"), dispatchState: text("dispatch_state").notNull().default("PENDING"), executionState: text("execution_state").notNull().default("READY"), attempts: integer("attempts").default(0).notNull(), leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true, mode: "date" }), triggerRunId: text("trigger_run_id"), createdAt: createdAt(),
+  executionOwnerRunId: text("execution_owner_run_id"), executionFencingToken: integer("execution_fencing_token").notNull().default(0), executionLeaseExpiresAt: timestamp("execution_lease_expires_at", { withTimezone: true, mode: "date" }), retryGeneration: integer("retry_generation").notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(), dispatchedAt: timestamp("dispatched_at", { withTimezone: true, mode: "date" }), lastErrorCode: text("last_error_code"),
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.id] }), check("outbox_one_entity_check", sql`num_nonnulls(${table.inboxId}, ${table.proposalId}, ${table.operationId}, ${table.observerEventId}) = 1`), check("outbox_dispatch_state_check", sql`${table.dispatchState} in ('PENDING','CLAIMED','DISPATCHED')`), check("outbox_execution_state_check", sql`${table.executionState} in ('READY','RUNNING','SUCCEEDED','FAILED','BLOCKED')`),
   foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "outbox_tenant_fk" }), foreignKey({ columns: [table.tenantId, table.inboxId], foreignColumns: [inbox.tenantId, inbox.id], name: "outbox_inbox_fk" }), foreignKey({ columns: [table.tenantId, table.proposalId], foreignColumns: [proposals.tenantId, proposals.id], name: "outbox_proposal_fk" }), foreignKey({ columns: [table.tenantId, table.operationId], foreignColumns: [operations.tenantId, operations.id], name: "outbox_operation_fk" }), foreignKey({ columns: [table.tenantId, table.observerEventId], foreignColumns: [observedEvents.tenantId, observedEvents.id], name: "outbox_observer_event_fk" }),

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { confirmTerminalTriggerRun } from "../src/adapters/trigger-run-status";
+import {
+  confirmTerminalTriggerRun,
+  readTriggerRunState,
+} from "../src/adapters/trigger-run-status";
 
 const input = {
   runId: "run_signal_1",
@@ -23,6 +26,86 @@ function retrievedRun(overrides: Record<string, unknown> = {}): Record<string, u
     ...overrides,
   };
 }
+
+function activeRun(status: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const flags = {
+    PENDING_VERSION: { isQueued: false, isExecuting: false, isWaiting: false },
+    QUEUED: { isQueued: true, isExecuting: false, isWaiting: false },
+    DEQUEUED: { isQueued: false, isExecuting: false, isWaiting: false },
+    EXECUTING: { isQueued: false, isExecuting: true, isWaiting: false },
+    WAITING: { isQueued: false, isExecuting: false, isWaiting: true },
+    DELAYED: { isQueued: false, isExecuting: false, isWaiting: false },
+  }[status];
+
+  return retrievedRun({ status, ...flags, ...overrides });
+}
+
+test("classifies a validated completed run as succeeded", async () => {
+  assert.equal(
+    await readTriggerRunState(input, async () => retrievedRun()),
+    "succeeded",
+  );
+});
+
+test("classifies validated final failure statuses as failed", async () => {
+  const finalFailureStatuses = ["CANCELED", "FAILED", "CRASHED", "EXPIRED", "TIMED_OUT", "SYSTEM_FAILURE"];
+
+  for (const status of finalFailureStatuses) {
+    assert.equal(
+      await readTriggerRunState(input, async () => retrievedRun({ status })),
+      "failed",
+      status,
+    );
+  }
+});
+
+test("classifies each SDK-known active status when its flags agree", async () => {
+  const activeStatuses = ["PENDING_VERSION", "QUEUED", "DEQUEUED", "EXECUTING", "WAITING", "DELAYED"];
+
+  for (const status of activeStatuses) {
+    assert.equal(
+      await readTriggerRunState(input, async () => activeRun(status)),
+      "active",
+      status,
+    );
+  }
+});
+
+test("returns null for identity mismatches before interpreting state", async () => {
+  const cases = [
+    { id: "run_other" },
+    { taskIdentifier: "signal.other-task" },
+    { payload: { tenantId: "tenant_other", jobId: input.jobId, schemaVersion: 1 } },
+    { payload: { tenantId: input.tenantId, jobId: "job_other", schemaVersion: 1 } },
+    { payload: { tenantId: input.tenantId, jobId: input.jobId, schemaVersion: 2 } },
+    { payload: { tenantId: input.tenantId, schemaVersion: 1 } },
+  ];
+
+  for (const overrides of cases) {
+    assert.equal(
+      await readTriggerRunState(input, async () => retrievedRun({ ...overrides, status: "COMPLETED" })),
+      null,
+      JSON.stringify(overrides),
+    );
+  }
+});
+
+test("returns null for unknown or contradictory run states", async () => {
+  const cases = [
+    retrievedRun({ status: "FUTURE_STATUS" }),
+    retrievedRun({ status: "COMPLETED", isExecuting: true }),
+    retrievedRun({ status: "COMPLETED", attempts: [{ status: "EXECUTING" }] }),
+    retrievedRun({ status: "COMPLETED", attempts: [{ status: "PENDING" }] }),
+    activeRun("QUEUED", { isQueued: false }),
+    activeRun("EXECUTING", { isWaiting: true }),
+    activeRun("WAITING", { isExecuting: true }),
+    activeRun("EXECUTING", { attempts: [{ status: "UNKNOWN_ATTEMPT" }] }),
+  ];
+
+  for (const run of cases) {
+    assert.equal(await readTriggerRunState(input, async () => run), null, JSON.stringify(run));
+  }
+});
 
 test("accepts a matching run in every final API-schema status", async () => {
   const finalStatuses = ["COMPLETED", "CANCELED", "FAILED", "CRASHED", "SYSTEM_FAILURE", "EXPIRED", "TIMED_OUT"];

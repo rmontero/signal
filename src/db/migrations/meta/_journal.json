@@ -36,6 +36,34 @@
       "when": 1789249658083,
       "tag": "0004_round_nomad",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789253733426,
+      "tag": "0005_swift_iceman",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789253952464,
+      "tag": "0006_fat_masque",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789271675023,
+      "tag": "0007_complex_doctor_octopus",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789313275345,
+      "tag": "0008_messy_captain_cross",
+      "breakpoints": true
     }
   ]
 }

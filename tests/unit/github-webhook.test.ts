@@ -15,6 +15,20 @@ const body = JSON.stringify({
   sender: { login: "rob" },
 });
 
+test("GitHub signature verifier rejects malformed and alternate-scheme signatures", async () => {
+  for (const signature of ["", "sha1=" + "a".repeat(40), "sha256=" + "a".repeat(63), "sha256=" + "a".repeat(65), "sha256=" + "g".repeat(64), "sha256=" + "A".repeat(64), signatureFor(body) + "extra", signatureFor(body) + "," + signatureFor(body)]) {
+    assert.deepEqual(await verifyGitHubWebhookSignature({ secret: "github-secret", rawBody: body, signature }), { ok: false, reason: "invalid_signature" });
+  }
+});
+
+test("GitHub classification fails closed for malformed required identities", () => {
+  const payload = JSON.parse(body);
+  for (const invalid of [null, [], 42, { ...payload, repository: null }, { ...payload, repository: { id: -1, full_name: "acme/signal" } }, { ...payload, installation: { id: 0 } }, { ...payload, pull_request: { number: 1.5 } }, { ...payload, pull_request: { number: Number.MAX_SAFE_INTEGER + 1 } }, { ...payload, sender: { login: "user/name" } }]) {
+    assert.deepEqual(classifyGitHubPullRequestWebhook(JSON.stringify(invalid), { event: "pull_request", delivery: "delivery-1" }), { kind: "ignore", reason: "missing_fields" });
+  }
+  assert.deepEqual(classifyGitHubPullRequestWebhook(body, { event: "pull_request", delivery: " " }), { kind: "ignore", reason: "missing_fields" });
+});
+
 function signatureFor(rawBody: string): string {
   return `sha256=${createHmac("sha256", "github-secret").update(rawBody).digest("hex")}`;
 }

@@ -1,79 +1,11 @@
-import { classifySlackEnvelope, classifySlackObserverEnvelope, verifySlackRequestSignature } from "../../../../adapters/slack-standalone.mts";
+import { after } from "next/server";
 import { acceptMention, acceptObserverEvent, resolveSlackObserverTenant } from "../../../../db/repositories";
 import { createDb } from "../../../../db/client";
-import { createObserverEventInput } from "../../../../domain/observer-events";
 import { dispatchStoredOutboxJob } from "../../../../trigger/outbox";
+import { createSlackEventsHandler } from "./handler";
 
 export const runtime = "nodejs";
-
-function json(body: Record<string, unknown>, status = 200): Response {
-  return Response.json(body, { status });
-}
-
-export async function POST(request: Request): Promise<Response> {
-  const rawBody = await request.text();
-  const signature = request.headers.get("x-slack-signature") ?? "";
-  const timestamp = request.headers.get("x-slack-request-timestamp") ?? "";
-  const signatureResult = await verifySlackRequestSignature({
-    signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-    timestamp,
-    rawBody,
-    signature,
-  });
-  if (!signatureResult.ok) return json({ error: "Invalid request" }, 401);
-
-  let envelope: Parameters<typeof classifySlackObserverEnvelope>[0];
-  try {
-    envelope = JSON.parse(rawBody) as Parameters<typeof classifySlackObserverEnvelope>[0];
-  } catch {
-    return json({ error: "Invalid request" }, 400);
-  }
-
-  const mention = classifySlackEnvelope(envelope);
-  if (mention.kind === "challenge") return json({ challenge: mention.challenge });
-  if (mention.kind === "app_mention") {
-    const { db, pool } = createDb();
-    try {
-      const tenantId = await resolveSlackObserverTenant(db, { slackTeamId: mention.teamId, channelId: mention.channelId });
-      if (!tenantId) return json({ ok: true }, 202);
-      const accepted = await acceptMention(db, { tenantId, slackEventId: mention.eventId, slackTeamId: mention.teamId, channelId: mention.channelId, threadTs: mention.threadTs, messageTs: mention.messageTs, actorSlackId: mention.userId });
-      try { await dispatchStoredOutboxJob(db, { tenantId, jobId: accepted.jobId, taskId: "signal.analyze-thread", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
-      return json({ ok: true, duplicate: accepted.duplicate });
-    } catch {
-      return json({ error: "Observer unavailable" }, 503);
-    } finally {
-      await pool.end();
-    }
-  }
-
-  const classification = classifySlackObserverEnvelope(envelope);
-  if (classification.kind !== "slack_message") return json({ ok: true }, 202);
-
-  const { db, pool } = createDb();
-  try {
-    const tenantId = await resolveSlackObserverTenant(db, {
-      slackTeamId: classification.teamId,
-      channelId: classification.channelId,
-    });
-    if (!tenantId) return json({ ok: true }, 202);
-
-    const input = createObserverEventInput({
-      tenantId,
-      source: "slack",
-      providerEventId: classification.eventId,
-      eventType: "message",
-      channelId: classification.channelId,
-      threadTs: classification.threadTs,
-      messageTs: classification.messageTs,
-      actorId: classification.userId,
-      rawBody,
-    });
-    const accepted = await acceptObserverEvent(db, input);
-    try { await dispatchStoredOutboxJob(db, { tenantId, jobId: accepted.jobId, taskId: "signal.observe-event", schemaVersion: 1 }); } catch { /* durable outbox recovery owns redispatch */ }
-    return json({ ok: true, duplicate: accepted.duplicate });
-  } catch {
-    return json({ error: "Observer unavailable" }, 503);
-  } finally {
-    await pool.end();
-  }
-}
+export const POST = createSlackEventsHandler({
+  createDb, after, acceptMention, acceptObserverEvent, resolveSlackObserverTenant, dispatchStoredOutboxJob,
+  signingSecret: () => process.env.SLACK_SIGNING_SECRET ?? "",
+});

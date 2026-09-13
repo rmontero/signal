@@ -143,6 +143,7 @@ export function createOpenRouterClient(options: OpenRouterClientOptions): OpenRo
           { role: "user", content: input.user },
         ],
         max_tokens: MAX_OUTPUT_TOKENS,
+        provider: { require_parameters: true },
         response_format: {
           type: "json_schema",
           json_schema: {

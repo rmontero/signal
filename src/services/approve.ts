@@ -1,4 +1,5 @@
-import { ApprovalBindingSchema, MutationSchema, type ApprovalBinding, type Mutation } from "../domain/contracts";
+import { createHash } from "node:crypto";
+import { ApprovalBindingSchema, canonicalJson, MutationSchema, type ApprovalBinding, type Mutation } from "../domain/contracts";
 
 export type ApprovalErrorCode =
   | "approval_invalid_request"
@@ -70,7 +71,8 @@ export interface ApprovalDependencies {
   recordReview: (input: ProposalReview) => Promise<void>;
   loadReview: (input: { tenantId: string; proposalId: string; modalId: string }) => Promise<ProposalReview | null>;
   isNamedApprover: (input: { tenantId: string; channelId: string; slackUserId: string }) => Promise<boolean>;
-  approve: (binding: ApprovalBinding) => Promise<{ approvalId: string; jobId: string }>;
+  // Persistence must atomically recheck this modal and return the original result on exact replay.
+  approve: (binding: ApprovalRequest) => Promise<{ approvalId: string; jobId: string }>;
   dismiss: (input: { tenantId: string; proposalId: string; version: number; slackTeamId: string; channelId: string; actorSlackId: string }) => Promise<void>;
 }
 
@@ -92,18 +94,49 @@ export interface ApprovalModal {
   blocks: Array<{ type: "section"; text: { type: "mrkdwn"; text: string } } | { type: "context"; elements: Array<{ type: "mrkdwn"; text: string }> }>;
 }
 
+export type ApprovalNoticeModal = Pick<ApprovalModal, "type" | "title" | "close" | "blocks">;
+
 function requireId(value: string, label: string): void {
-  if (typeof value !== "string" || !value.trim()) throw new ApprovalError("approval_invalid_request", `${label} is required`);
+  if (typeof value !== "string" || !value || value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new ApprovalError("approval_invalid_request", `${label} is invalid`);
+  }
 }
 
-function proposalIsUsable(proposal: ApprovalProposal, now: Date): void {
-  if (proposal.state !== "PENDING") throw new ApprovalError("approval_stale", "proposal is no longer pending");
-  if (proposal.expiresAt.getTime() <= now.getTime()) throw new ApprovalError("approval_stale", "proposal has expired");
+function proposalIsUsable(proposal: ApprovalProposal, now: Date, allowReplay = false): void {
+  if (proposal.state !== "PENDING" && !(allowReplay && proposal.state === "APPROVED")) {
+    throw new ApprovalError("approval_stale", "proposal is no longer pending");
+  }
+  if (!(proposal.expiresAt instanceof Date) || !Number.isFinite(proposal.expiresAt.getTime()) || !(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new ApprovalError("approval_stale", "proposal expiry is invalid");
+  }
+  // An expired pending proposal cannot be approved. A replay only retrieves an existing result.
+  if (proposal.state === "PENDING" && proposal.expiresAt.getTime() <= now.getTime()) {
+    throw new ApprovalError("approval_stale", "proposal has expired");
+  }
   try {
-    MutationSchema.parse(proposal.mutation);
+    for (const key of ["tenantId", "proposalId", "operationId", "slackTeamId", "channelId"] as const) requireId(proposal[key], key);
+    if (!Number.isSafeInteger(proposal.version) || proposal.version < 1) throw new Error("invalid version");
+    const validated = MutationSchema.parse(proposal.mutation);
+    if (canonicalJson(validated) !== canonicalJson(proposal.mutation)) throw new Error("noncanonical mutation");
+    // Hash the persisted bytes. The drafting helper prepares/normalizes mutations and is unsafe here.
+    const hash = createHash("sha256").update(canonicalJson({
+      schemaVersion: 1, tenantId: proposal.tenantId, operationId: proposal.operationId,
+      version: proposal.version, mutation: proposal.mutation,
+    }), "utf8").digest("hex");
+    if (hash !== proposal.payloadHash) throw new Error("hash mismatch");
   } catch {
     throw new ApprovalError("approval_stale", "proposal payload is invalid");
   }
+}
+
+async function requireNamedApprover(input: PrepareReviewRequest, dependencies: ApprovalDependencies): Promise<void> {
+  let authorized: boolean;
+  try {
+    authorized = await dependencies.isNamedApprover({ tenantId: input.tenantId, channelId: input.channelId, slackUserId: input.actorSlackId });
+  } catch {
+    throw new ApprovalError("approval_persistence_failed", "approver policy could not be checked");
+  }
+  if (authorized !== true) throw new ApprovalError("approval_unauthorized", "actor is not a named approver");
 }
 
 function escapeMrkdwn(value: string): string {
@@ -148,12 +181,20 @@ export function renderApprovalModal(review: ReviewResult): ApprovalModal {
 async function loadScopedProposal(
   input: { tenantId: string; proposalId: string },
   dependencies: ApprovalDependencies,
+  allowReplay = false,
 ): Promise<ApprovalProposal> {
   requireId(input.tenantId, "tenantId");
   requireId(input.proposalId, "proposalId");
-  const proposal = await dependencies.loadProposal(input);
-  if (!proposal || proposal.tenantId !== input.tenantId) throw new ApprovalError("approval_not_found", "proposal is unavailable");
-  proposalIsUsable(proposal, dependencies.now());
+  let proposal: ApprovalProposal | null;
+  try {
+    proposal = await dependencies.loadProposal(input);
+  } catch {
+    throw new ApprovalError("approval_persistence_failed", "proposal could not be loaded");
+  }
+  if (!proposal || proposal.tenantId !== input.tenantId || proposal.proposalId !== input.proposalId) {
+    throw new ApprovalError("approval_not_found", "proposal is unavailable");
+  }
+  proposalIsUsable(proposal, dependencies.now(), allowReplay);
   return proposal;
 }
 
@@ -165,6 +206,8 @@ export async function prepareProposalReview(input: PrepareReviewRequest, depende
   if (proposal.slackTeamId !== input.slackTeamId || proposal.channelId !== input.channelId) {
     throw new ApprovalError("approval_not_found", "proposal is unavailable");
   }
+  await requireNamedApprover(input, dependencies);
+  proposalIsUsable(proposal, dependencies.now());
   return {
     result: {
       proposalId: proposal.proposalId,
@@ -186,6 +229,11 @@ export async function prepareProposalReview(input: PrepareReviewRequest, depende
 
 export async function recordProposalReview(prepared: PreparedProposalReview, modalId: string, dependencies: ApprovalDependencies): Promise<void> {
   requireId(modalId, "modalId");
+  // Slack allocates the ID after opening the modal; state or policy may have changed meanwhile.
+  const current = await prepareProposalReview(prepared.review, dependencies);
+  if (canonicalJson(prepared.review) !== canonicalJson(current.review) || canonicalJson(prepared.result) !== canonicalJson(current.result)) {
+    throw new ApprovalError("approval_stale", "review no longer matches the persisted proposal");
+  }
   try {
     await dependencies.recordReview({ ...prepared.review, modalId });
   } catch {
@@ -201,8 +249,11 @@ export async function openProposalReview(input: ReviewRequest, dependencies: App
 }
 
 export async function submitProposalApproval(input: ApprovalRequest, dependencies: ApprovalDependencies): Promise<{ approvalId: string; jobId: string }> {
+  requireId(input.modalId, "modalId");
   let binding: ApprovalBinding;
   try {
+    for (const key of ["tenantId", "proposalId", "operationId", "slackTeamId", "channelId", "actorSlackId"] as const) requireId(input[key], key);
+    if (!Number.isSafeInteger(input.version)) throw new Error("invalid version");
     const bindingInput = {
       tenantId: input.tenantId,
       proposalId: input.proposalId,
@@ -219,32 +270,38 @@ export async function submitProposalApproval(input: ApprovalRequest, dependencie
   } catch {
     throw new ApprovalError("approval_invalid_request", "approval binding is invalid");
   }
-  const review = await dependencies.loadReview({ tenantId: binding.tenantId, proposalId: binding.proposalId, modalId: input.modalId });
+  let review: ProposalReview | null;
+  try {
+    review = await dependencies.loadReview({ tenantId: binding.tenantId, proposalId: binding.proposalId, modalId: input.modalId });
+  } catch {
+    throw new ApprovalError("approval_persistence_failed", "review could not be loaded");
+  }
   if (!review || review.tenantId !== binding.tenantId || review.proposalId !== binding.proposalId || review.modalId !== input.modalId || review.actorSlackId !== binding.actorSlackId || review.slackTeamId !== binding.slackTeamId || review.channelId !== binding.channelId || review.version !== binding.version) {
     throw new ApprovalError("approval_unauthorized", "approval context is not authorized");
   }
-  const proposal = await loadScopedProposal({ tenantId: binding.tenantId, proposalId: binding.proposalId }, dependencies);
+  const proposal = await loadScopedProposal({ tenantId: binding.tenantId, proposalId: binding.proposalId }, dependencies, true);
   if (proposal.operationId !== binding.operationId || proposal.version !== binding.version || proposal.payloadHash !== binding.payloadHash || proposal.slackTeamId !== binding.slackTeamId || proposal.channelId !== binding.channelId || proposal.expiresAt.toISOString() !== binding.expiresAt) {
     throw new ApprovalError("approval_stale", "approval binding does not match the persisted proposal");
   }
-  let namedApprover = false;
+  await requireNamedApprover(binding, dependencies);
+  proposalIsUsable(proposal, dependencies.now(), true);
   try {
-    namedApprover = await dependencies.isNamedApprover({ tenantId: binding.tenantId, channelId: binding.channelId, slackUserId: binding.actorSlackId });
-  } catch {
-    throw new ApprovalError("approval_persistence_failed", "approver policy could not be checked");
-  }
-  if (!namedApprover) throw new ApprovalError("approval_unauthorized", "actor is not a named approver");
-  try {
-    return await dependencies.approve(binding);
+    return await dependencies.approve({ ...binding, modalId: input.modalId });
   } catch {
     throw new ApprovalError("approval_stale", "proposal could not be approved");
   }
 }
 
 export async function dismissProposal(input: DismissProposalRequest, dependencies: ApprovalDependencies): Promise<void> {
+  requireId(input.slackTeamId, "slackTeamId");
+  requireId(input.channelId, "channelId");
+  requireId(input.actorSlackId, "actorSlackId");
+  if (!Number.isSafeInteger(input.version) || input.version < 1) throw new ApprovalError("approval_invalid_request", "proposal version is invalid");
   const proposal = await loadScopedProposal({ tenantId: input.tenantId, proposalId: input.proposalId }, dependencies);
   if (proposal.slackTeamId !== input.slackTeamId || proposal.channelId !== input.channelId) throw new ApprovalError("approval_not_found", "proposal is unavailable");
   if (proposal.version !== input.version) throw new ApprovalError("approval_stale", "proposal version is stale");
+  await requireNamedApprover(input, dependencies);
+  proposalIsUsable(proposal, dependencies.now());
   try {
     await dependencies.dismiss({ tenantId: proposal.tenantId, proposalId: proposal.proposalId, version: proposal.version, slackTeamId: input.slackTeamId, channelId: input.channelId, actorSlackId: input.actorSlackId });
   } catch {

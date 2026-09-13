@@ -1,3 +1,7 @@
+export class PersistenceConflict extends Error {
+  constructor(message: string) { super(message); this.name = "PersistenceConflict"; }
+}
+
 export function isUniqueViolation(error: unknown): boolean {
   return errorCode(error) === "23505";
 }
