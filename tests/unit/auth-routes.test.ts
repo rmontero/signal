@@ -309,11 +309,44 @@ for (const scenario of ["issuer", "missing-issuer", "array", "oversize", "invali
   });
 }
 
+// Shared synthetic responses exercise the SDK's real revocation/token readers.
+const responseStreamFixtures = String.raw`
+  let bodyCancellations = 0;
+  function responseStreamFixture(scenario, marker) {
+    const failure = () => new Error(marker, { cause: { detail: marker } });
+    const headers = { "content-type": "application/json", "x-provider-detail": "PRIV_RESPONSE" };
+    let stream;
+    if (scenario === "transport-error") throw failure();
+    if (["header-error", "stream-error", "http-error"].includes(scenario)) {
+      stream = new ReadableStream({ start(controller) { controller.error(failure()); } });
+      if (scenario === "header-error") headers["content-length"] = "1048577";
+    } else if (scenario === "header-cancel") {
+      headers["content-length"] = "1048577 PRIV_RESPONSE";
+      stream = new ReadableStream({ cancel() { bodyCancellations++; throw failure(); } });
+    } else if (["chunked-overflow", "understated-length", "late-stream-error"].includes(scenario)) {
+      if (scenario === "understated-length") headers["content-length"] = "1";
+      let chunks = 0;
+      stream = new ReadableStream({
+        pull(controller) {
+          if (scenario === "late-stream-error" && chunks++) controller.error(failure());
+          else controller.enqueue(new Uint8Array(524289));
+        },
+        cancel() { bodyCancellations++; throw failure(); },
+      });
+    } else if (scenario === "exact-limit") {
+      headers["content-length"] = "1048576";
+      return new Response(new Uint8Array(1048576), { headers });
+    } else return null;
+    return new Response(stream, { status: scenario === "http-error" ? 400 : 200, statusText: "PRIV_RESPONSE", headers });
+  }
+`;
+
 const refreshTokenLogoutProbe = String.raw`
   import assert from "node:assert/strict";
   import { registerHooks } from "node:module";
   import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
   import { NextRequest } from "next/server.js";
+  ${responseStreamFixtures}
   registerHooks({ resolve(specifier, context, nextResolve) {
     return specifier === "server-only"
       ? { url: "data:text/javascript,export {};", shortCircuit: true }
@@ -340,7 +373,7 @@ const refreshTokenLogoutProbe = String.raw`
     assert.equal(form.get("token"), "fixture-private-refresh-token");
     assert.equal(form.get("token_type_hint"), "refresh_token");
     revocationRequests++;
-    return new Response(null, { status: 200 });
+    return responseStreamFixture(process.argv[3], "PRIV_REVOKE") ?? new Response(null, { status: 200 });
   };
   const cookie = await generateSessionCookie({
     user: { sub: "auth0|fixture" },
@@ -362,17 +395,17 @@ const refreshTokenLogoutProbe = String.raw`
     status: response.status, body: await response.text(), headers: Object.fromEntries(response.headers),
     sessionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session=;") && cookie.includes("Max-Age=0")),
     transactionCleared: response.headers.getSetCookie().some((cookie) => cookie.startsWith("__txn_fixture=;") && cookie.includes("Max-Age=0")),
-    discoveryRequests, revocationRequests,
+    discoveryRequests, revocationRequests, bodyCancellations,
   }));
 `;
 
-function probeRefreshTokenLogout(metadata: Record<string, unknown>, returnTo = "/settings?tab=connections") {
-  const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", refreshTokenLogoutProbe, JSON.stringify(metadata), returnTo], {
+function probeRefreshTokenLogout(metadata: Record<string, unknown>, returnTo = "/settings?tab=connections", responseScenario = "success") {
+  const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", refreshTokenLogoutProbe, JSON.stringify(metadata), returnTo, responseScenario], {
     cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000,
   });
   assert.equal(probe.status, 0, probe.stderr);
   const output = probe.stderr + probe.stdout;
-  for (const privateValue of ["PRIV_ENDPOINT", "fixture-private-refresh-token", "fixture-private-id-token"]) {
+  for (const privateValue of ["PRIV_ENDPOINT", "PRIV_REVOKE", "PRIV_RESPONSE", "fixture-private-refresh-token", "fixture-private-id-token"]) {
     assert.equal(probe.stdout.includes(privateValue), false, "Provider details and tokens must not reach HTTP output");
     assert.equal(probe.stderr.includes(privateValue), false, "Provider details and tokens must not reach SDK stderr");
   }
@@ -436,12 +469,31 @@ test("real SDK refresh-token logout still revokes over HTTPS and preserves only 
   }
 });
 
+for (const scenario of ["header-error", "header-cancel", "stream-error", "late-stream-error", "chunked-overflow", "understated-length", "http-error", "transport-error", "exact-limit"]) {
+  test(`real SDK revocation response boundary contains body failures: ${scenario}`, () => {
+    const { response, stderr } = probeRefreshTokenLogout({}, "/settings?tab=connections", scenario);
+    assert.equal(response.status, 307);
+    assert.equal(response.revocationRequests, 1);
+    const redirect = new URL(response.headers.location);
+    assert.equal(redirect.origin, "https://tenant.example.auth0.com");
+    assert.equal(redirect.pathname, "/oidc/logout");
+    assert.equal(redirect.searchParams.get("post_logout_redirect_uri"), "https://signal.example/settings?tab=connections");
+    assert.equal(redirect.searchParams.has("id_token_hint"), false);
+    if (scenario === "exact-limit") assert.equal(stderr, "");
+    else assert.match(stderr, /AUTH0_(TRANSPORT|HTTP)_FAILURE/);
+    if (["header-cancel", "chunked-overflow", "understated-length"].includes(scenario)) {
+      assert.equal(response.bodyCancellations, 1);
+    }
+  });
+}
+
 test("real SDK callback retains PKCE, state and token-claim validation through the transport boundary", () => {
   const probe = spawnSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "--eval", String.raw`
     import assert from "node:assert/strict";
     import { createHash, generateKeyPairSync, sign } from "node:crypto";
     import { registerHooks } from "node:module";
     import { NextRequest } from "next/server.js";
+    ${responseStreamFixtures}
     registerHooks({ resolve(specifier, context, nextResolve) {
       return specifier === "server-only"
         ? { url: "data:text/javascript,export {};", shortCircuit: true }
@@ -473,6 +525,8 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
       assert.equal(form.get("redirect_uri"), base + "/auth/callback");
       assert.equal(createHash("sha256").update(form.get("code_verifier")).digest("base64url"), challenge);
       tokenRequests++;
+      const failedResponse = responseStreamFixture(form.get("code"), "PRIV_TOKEN");
+      if (failedResponse) return failedResponse;
       const now = Math.floor(Date.now() / 1000);
       const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
       const unsigned = encode({ alg: "RS256", kid: "fixture" }) + "." + encode({
@@ -486,7 +540,7 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
     const { auth0 } = await import("./src/lib/auth0.ts");
     const { GET: callback } = await import("./src/app/auth/callback/route.ts");
     const cookieHeader = (response) => response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
-    for (const mode of ["valid", "wrong-state", "wrong-nonce", "wrong-issuer"]) {
+    for (const mode of ["valid", "wrong-state", "wrong-nonce", "wrong-issuer", "header-error", "header-cancel", "stream-error", "late-stream-error", "chunked-overflow", "understated-length", "http-error", "transport-error"]) {
       const start = await auth0.middleware(new Request(base + "/auth/login?returnTo=%2Fsettings"));
       assert.equal(start.status, 307);
       const authorization = new URL(start.headers.get("location"));
@@ -498,6 +552,8 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
       url.searchParams.set("code", mode);
       url.searchParams.set("returnTo", "https://evil.example");
       const response = await callback(new Request(url, { headers: { cookie: cookieHeader(start) } }));
+      assert.doesNotMatch(JSON.stringify(Object.fromEntries(response.headers)), /PRIV_TOKEN|PRIV_RESPONSE/);
+      assert.equal(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__txn_") && cookie.includes("Max-Age=0")), mode !== "wrong-state");
       if (mode === "valid") {
         assert.equal(response.status, 307);
         assert.equal(response.headers.get("location"), base + "/settings");
@@ -511,7 +567,7 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
       }
     }
     assert.equal(discoveryRequests, 1);
-    assert.equal(tokenRequests, 3);
+    assert.equal(tokenRequests, 11);
     console.log("PKCE/state/token-claim checks passed; external requests: 0");
   `], { cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000 });
   assert.equal(probe.status, 0, probe.stderr);

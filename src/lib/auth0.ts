@@ -83,21 +83,33 @@ function auth0Diagnostic(category: Auth0Diagnostic): Error {
   return error;
 }
 
-async function readDiscoveryBody(response: Response): Promise<string> {
+async function readAuth0ResponseBody(response: Response): Promise<ArrayBuffer | null> {
+  // Match SDK 4.29.0's cap before its wrapper can read or cancel the body.
+  const maxBytes = 1024 * 1024;
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength && Number.parseInt(declaredLength, 10) > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw auth0Diagnostic("AUTH0_TRANSPORT_FAILURE");
+  }
   const reader = response.body?.getReader();
-  if (!reader) throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
   let bytes = 0;
-  let body = "";
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) return body + decoder.decode();
+      if (done) break;
       bytes += value.byteLength;
-      // Match SDK 4.29.0's one-MiB response limit before buffering discovery.
-      if (bytes > 1024 * 1024) throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
-      body += decoder.decode(value, { stream: true });
+      if (bytes > maxBytes) throw auth0Diagnostic("AUTH0_TRANSPORT_FAILURE");
+      chunks.push(value);
     }
+    const body = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return body.buffer;
   } finally {
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
@@ -141,10 +153,18 @@ function createAuth0Fetch(domain: string): typeof fetch {
       await response.body?.cancel().catch(() => undefined);
       throw auth0Diagnostic("AUTH0_HTTP_FAILURE");
     }
-    if ((input instanceof Request ? input.url : String(input)) !== discoveryUrl) return response;
+    const isDiscovery = (input instanceof Request ? input.url : String(input)) === discoveryUrl;
     try {
-      const body = await readDiscoveryBody(response);
-      const metadata: unknown = JSON.parse(body);
+      // Finish all upstream reads/cancellation here, including token/revocation
+      // bodies the SDK may otherwise consume later (or never consume at all).
+      const body = await readAuth0ResponseBody(response);
+      if (!isDiscovery) {
+        const headers = new Headers(response.headers);
+        headers.delete("content-length"); // Already checked against actual bytes.
+        return new Response(body, { headers });
+      }
+      if (body === null) throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+      const metadata: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata) || !("issuer" in metadata)
         || typeof metadata.issuer !== "string" || new URL(metadata.issuer).href !== issuer.href) {
         throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
@@ -156,7 +176,7 @@ function createAuth0Fetch(domain: string): typeof fetch {
       // boundary. The SDK still validates this unchanged metadata and all tokens.
       return new Response(body, { headers: { "content-type": "application/json" } });
     } catch {
-      throw auth0Diagnostic("AUTH0_DISCOVERY_FAILURE");
+      throw auth0Diagnostic(isDiscovery ? "AUTH0_DISCOVERY_FAILURE" : "AUTH0_TRANSPORT_FAILURE");
     }
   };
 }
