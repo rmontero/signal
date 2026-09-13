@@ -101,7 +101,10 @@ async function lockedContext(tx: Transaction, input: { tenantId: string; proposa
   requireAuthority(hint);
   const [thread] = await tx.select().from(threads).where(and(eq(threads.tenantId, input.tenantId), eq(threads.id, hint.threadId))).for("update");
   requireAuthority(thread);
-  const [proposal] = await tx.select().from(proposals).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, hint.id), eq(proposals.threadId, thread.id))).for("update");
+  // Drizzle's Date mode truncates PostgreSQL timestamps to milliseconds; keep
+  // finer persisted values from being mistaken for the bound expiry.
+  const [proposal] = await tx.select().from(proposals).where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, hint.id), eq(proposals.threadId, thread.id),
+    sql`${proposals.expiresAt} = date_trunc('milliseconds', ${proposals.expiresAt})`)).for("update");
   requireAuthority(proposal && (input.operationId === undefined || proposal.operationId === input.operationId));
   const [mapping] = await tx.select().from(channelMappings).where(and(eq(channelMappings.tenantId, input.tenantId), eq(channelMappings.channelId, thread.channelId))).for("share");
   requireAuthority(mapping);
@@ -141,7 +144,8 @@ async function requireReview(tx: Transaction, input: ApprovalInput): Promise<voi
 }
 
 async function existingApproval(tx: Transaction, context: Context, input: ApprovalInput): Promise<{ approvalId: string; jobId: string }> {
-  const [recorded] = await tx.select().from(approvals).where(and(eq(approvals.tenantId, input.tenantId), eq(approvals.proposalId, input.proposalId))).for("share");
+  const [recorded] = await tx.select().from(approvals).where(and(eq(approvals.tenantId, input.tenantId), eq(approvals.proposalId, input.proposalId),
+    sql`${approvals.expiresAt} = date_trunc('milliseconds', ${approvals.expiresAt})`)).for("share");
   requireAuthority(recorded && validDate(recorded.expiresAt) && validDate(recorded.approvedAt));
   const original = parseBinding({
     tenantId: recorded.tenantId, proposalId: recorded.proposalId, operationId: recorded.operationId,
@@ -225,7 +229,7 @@ export async function loadProposalForApproval(db: SignalDb, input: { tenantId: s
       .innerJoin(tenants, eq(tenants.id, proposals.tenantId))
       .innerJoin(threads, and(eq(threads.tenantId, proposals.tenantId), eq(threads.id, proposals.threadId)))
       .innerJoin(channelMappings, and(eq(channelMappings.tenantId, threads.tenantId), eq(channelMappings.channelId, threads.channelId)))
-      .where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, input.proposalId))).limit(1);
+      .where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, input.proposalId), sql`${proposals.expiresAt} = date_trunc('milliseconds', ${proposals.expiresAt})`)).limit(1);
     if (!row) return null;
     try {
       const mutation = immutableMutation(row.proposal);
