@@ -365,7 +365,10 @@ function SettingsView({ connectors }: { connectors: ConnectorSummary[] }) {
   );
 }
 
-export function MonitoringDashboard({ data }: { data: MonitoringDashboardData }) {
+export function MonitoringDashboard({ data: receivedData }: { data: MonitoringDashboardData }) {
+  // The server loader enforces viewer authorization before serialization. Also
+  // discard stale records when an unavailable response reaches the renderer.
+  const data = useMemo(() => receivedData.mode === "LIVE" ? receivedData : { ...receivedData, conversations: [] }, [receivedData]);
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
   const [filter, setFilter] = useState<ConversationFilter>("open");
@@ -428,7 +431,7 @@ export function MonitoringDashboard({ data }: { data: MonitoringDashboardData })
 
         <button className="workspace-switcher" type="button" onClick={() => navigate("settings")} aria-label="View pilot setup">
           <span className="workspace-avatar">S</span>
-          <span><strong>Signal pilot</strong><small>{data.mode === "LIVE" ? "Server-selected workspace" : "Setup needs verification"}</small></span>
+          <span><strong>Signal pilot</strong><small>{data.mode === "LIVE" ? "Authorized pilot snapshot" : "Public setup shell"}</small></span>
           <span className="workspace-chevron" aria-hidden="true">⚙</span>
         </button>
 

@@ -84,7 +84,7 @@ export function getConnectorStatuses(env: ConnectorEnvironment): ConnectorSummar
       name: "Auth0",
       category: "Access" as const,
       required: ["AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "AUTH0_SECRET"],
-      detail: "The optional authenticated inspector is disabled in this MVP. Credentials alone do not enable login, map a user to a tenant or authorize GitHub writes.",
+      detail: "The optional authenticated inspector is disabled in this MVP. Private monitoring stays unavailable until a verified server session maps the viewer to the pilot. Credentials or a server-configured tenant alone do not grant viewer access or authorize GitHub writes.",
     },
     {
       id: "trigger",

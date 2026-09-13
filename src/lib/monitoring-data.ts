@@ -21,11 +21,35 @@ const defaultDependencies = {
   listObservedConversations,
 };
 
-// Dependencies support isolated tests; tenant identity always comes from the server environment.
-export async function loadMonitoringDashboardData(dependencies = defaultDependencies): Promise<MonitoringDashboardData> {
+type MonitoringDependencies = typeof defaultDependencies & {
+  // Trusted server composition only: verify the session, then resolve its subject's
+  // tenant mapping. Never implement this from a header, query, browser ID or env ID.
+  // Auth0 is incomplete, so production deliberately provides no resolver yet.
+  resolveViewer?: () => Promise<{ subject: string; tenantId: string | null } | null>;
+};
+
+// Not a Server Action or HTTP API. The optional function dependency is for isolated
+// server tests; the public page uses the default, which cannot read private records.
+export async function loadMonitoringDashboardData(dependencies: MonitoringDependencies = defaultDependencies): Promise<MonitoringDashboardData> {
   const connectors = getConnectorStatuses(process.env as ConnectorEnvironment);
   const tenantId = process.env.SIGNAL_DASHBOARD_TENANT_ID?.trim();
   const unavailable = (notice: string): MonitoringDashboardData => ({ mode: "UNAVAILABLE", notice, conversations: [], connectors });
+  if (typeof window !== "undefined" || typeof dependencies.resolveViewer !== "function") {
+    return unavailable("Private monitoring is unavailable: viewer authentication is not configured. The optional Auth0 inspector is disabled or incomplete. This public setup shell does not load private records; configuring a pilot tenant alone does not grant access.");
+  }
+
+  // Resolve and validate authority before even constructing a DB connection. Use
+  // one generic denial for anonymous, unmapped, mismatched and failed resolutions.
+  const viewerDenied = () => unavailable("Private monitoring is unavailable for this viewer. A verified server session mapped to the configured pilot is required. No private records were loaded.");
+  try {
+    const viewer = await dependencies.resolveViewer();
+    if (!viewer || typeof viewer.subject !== "string" || !viewer.subject.trim() || typeof viewer.tenantId !== "string" || !viewer.tenantId || viewer.tenantId !== tenantId) {
+      return viewerDenied();
+    }
+  } catch {
+    return viewerDenied();
+  }
+
   if (!tenantId) {
     return unavailable("Configure SIGNAL_DASHBOARD_TENANT_ID on the server to select the pilot. No monitoring records have been loaded.");
   }

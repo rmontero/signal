@@ -37,6 +37,7 @@ function fakeDependencies(overrides: Partial<Dependencies> = {}) {
   let closed = 0;
   const calls: string[] = [];
   const dependencies: Dependencies = {
+    resolveViewer: async () => ({ subject: "auth0|synthetic", tenantId: "tenant-fixture" }),
     createDb: () => ({ db: {} as Connection["db"], pool: { end: async () => { closed += 1; } } as Connection["pool"] }),
     loadConfiguredPilot: async (_db, tenantId) => {
       calls.push("pilot:" + tenantId);

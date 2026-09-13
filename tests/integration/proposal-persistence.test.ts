@@ -16,7 +16,9 @@ import { renderPersistedProposalCard } from "../../src/services/proposal-card";
 
 const databaseUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("A04 persistence isolated database is required");
-const { db, pool } = createDb(databaseUrl);
+const fixtureUrl = new URL(databaseUrl);
+fixtureUrl.searchParams.set("options", `${fixtureUrl.searchParams.get("options") ?? ""} -c lock_timeout=5000 -c statement_timeout=15000 -c idle_in_transaction_session_timeout=20000`.trim());
+const { db, pool } = createDb(fixtureUrl.toString());
 
 before(async () => {
   try {
@@ -27,7 +29,7 @@ before(async () => {
 after(async () => { await pool.end(); });
 
 function fixtureTest(name: string, work: () => Promise<void>): void {
-  test(`A04 persistence ${name}`, async () => {
+  test(`A04 persistence ${name}`, { timeout: 60_000 }, async () => {
     try { await work(); }
     catch (error) {
       if (error instanceof assert.AssertionError || error instanceof PersistenceConflict) throw error;
