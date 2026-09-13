@@ -218,6 +218,7 @@ function SidebarNavItem({
 }
 
 function ConversationWorkspace({
+  available,
   filter,
   filteredConversations,
   query,
@@ -228,6 +229,7 @@ function ConversationWorkspace({
   onSelect,
   onSourceChange,
 }: {
+  available: boolean;
   filter: ConversationFilter;
   filteredConversations: MonitoredConversation[];
   query: string;
@@ -241,7 +243,7 @@ function ConversationWorkspace({
   return (
     <section className="monitoring-workspace" id="conversations">
       <div className="conversation-column">
-        <div className="section-title-row"><div><p className="eyebrow">Persisted records</p><h2>{filter === "all" ? "All conversations" : filter === "needs-human" ? "Conversations needing attention" : "Open conversations"}</h2></div><span className="queue-count">{filteredConversations.length} showing</span></div>
+        <div className="section-title-row"><div><p className="eyebrow">Persisted records</p><h2>{filter === "all" ? "All conversations" : filter === "needs-human" ? "Conversations needing attention" : "Open conversations"}</h2></div><span className="queue-count">{available ? `${filteredConversations.length} showing` : "No snapshot available"}</span></div>
         <div className="toolbar">
           <div className="filter-tabs" role="group" aria-label="Conversation status">
             {filterOptions.map((option) => <button className={filter === option.value ? "filter-tab filter-tab-active" : "filter-tab"} key={option.value} onClick={() => onFilterChange(option.value)} type="button" aria-pressed={filter === option.value}>{option.label}</button>)}
@@ -276,7 +278,7 @@ function OverviewView({
   return (
     <>
       <section className="page-heading">
-        <div><p className="eyebrow">Pilot monitoring</p><h1>Know what needs a human.</h1><p className="page-subtitle">Review persisted proposals and passive classifications. Feed health and current worker progress require separate verification.</p></div>
+        <div><p className="eyebrow">Workspace monitoring</p><h1>Know what needs a human.</h1><p className="page-subtitle">Review persisted proposals and passive classifications. Feed health and current worker progress require separate verification.</p></div>
         <div className="heading-status"><span className="observer-orbit"><span /></span><div><strong>Passive monitoring snapshot</strong><span>{data.mode === "LIVE" ? "Records loaded · feed health unverified" : "Monitoring data unavailable"}</span></div></div>
       </section>
 
@@ -290,7 +292,7 @@ function OverviewView({
       <section className="attention-card">
         <div className="attention-accent" />
         <div className="attention-icon">!</div>
-        <div className="attention-copy"><div className="attention-overline">{data.mode === "LIVE" ? `${metrics.needsHuman} records need attention` : "Monitoring status unknown"}</div><h2>{topDecision?.title ?? (data.mode === "LIVE" ? "No attention items in this snapshot" : "Monitoring data is unavailable")}</h2><p>{topDecision?.summary ?? (data.mode === "LIVE" ? "Refresh for the latest persisted records. Feed health is not verified by this view." : "Open Settings for pilot setup requirements and check the data notice above.")}</p></div>
+        <div className="attention-copy"><div className="attention-overline">{data.mode === "LIVE" ? `${metrics.needsHuman} records need attention` : "Monitoring status unknown"}</div><h2>{topDecision?.title ?? (data.mode === "LIVE" ? "No attention items in this snapshot" : "Monitoring data is unavailable")}</h2><p>{topDecision?.summary ?? (data.mode === "LIVE" ? "Refresh for the latest persisted records. Feed health is not verified by this view." : "Private monitoring requires Auth0 sign-in and active workspace membership. Open Settings for provider setup requirements and check the data notice above.")}</p></div>
         <button className="attention-action" onClick={onDecisionFilter} type="button">See attention items <span aria-hidden="true">→</span></button>
       </section>
 
@@ -303,21 +305,21 @@ function EmptySection({ icon, title, detail }: { icon: string; title: string; de
   return <div className="section-empty"><span className="empty-icon">{icon}</span><h2>{title}</h2><p>{detail}</p></div>;
 }
 
-function DecisionsView({ conversations, onOpenConversation }: { conversations: MonitoredConversation[]; onOpenConversation: (id: string) => void }) {
+function DecisionsView({ available, conversations, onOpenConversation }: { available: boolean; conversations: MonitoredConversation[]; onOpenConversation: (id: string) => void }) {
   const decisions = conversations.filter(({ status }) => status === "needs-human");
   return (
     <section className="workspace-section" id="decisions">
-      <div className="section-title-row"><div><p className="eyebrow">Human review</p><h2>Decisions and blockers</h2></div><span className="queue-count">{decisions.length} in this snapshot</span></div>
+      <div className="section-title-row"><div><p className="eyebrow">Human review</p><h2>Decisions and blockers</h2></div><span className="queue-count">{available ? `${decisions.length} in this snapshot` : "No snapshot available"}</span></div>
       {decisions.length ? <div className="decision-grid">{decisions.map((conversation) => <button className="decision-card" key={conversation.id} onClick={() => onOpenConversation(conversation.id)} type="button"><div className="decision-card-topline"><SourceMark source={conversation.source} /><span>{conversation.signalLabel}</span><span className="priority priority-high"><span className="priority-dot" />Needs attention</span></div><h3>{conversation.title}</h3><p>{conversation.decisionQuestion ?? conversation.summary}</p><span className="decision-card-action">Open conversation ↗</span></button>)}</div> : <EmptySection icon="◇" title="No attention items loaded" detail="No matching records are available in this snapshot. Check the data notice and refresh before concluding that nothing needs attention." />}
     </section>
   );
 }
 
-function ActivityView({ conversations }: { conversations: MonitoredConversation[] }) {
+function ActivityView({ available, conversations }: { available: boolean; conversations: MonitoredConversation[] }) {
   const activity = [...conversations].sort((a, b) => b.activityTimestamp.localeCompare(a.activityTimestamp)).flatMap((conversation) => conversation.activity.map((entry, index) => ({ ...entry, id: `${conversation.id}:${index}`, conversationTitle: conversation.title })));
   return (
     <section className="workspace-section" id="activity">
-      <div className="section-title-row"><div><p className="eyebrow">Observer timeline</p><h2>Recent activity</h2></div><span className="queue-count">{activity.length} events</span></div>
+      <div className="section-title-row"><div><p className="eyebrow">Observer timeline</p><h2>Recent activity</h2></div><span className="queue-count">{available ? `${activity.length} events` : "No snapshot available"}</span></div>
       {activity.length ? <div className="activity-feed">{activity.map((entry) => <div className="activity-feed-row" key={entry.id}><SourceMark source={entry.source} /><div><strong>{entry.label}</strong><span>{entry.conversationTitle}</span><small>{entry.detail}</small></div><time>{entry.timestamp}</time></div>)}</div> : <EmptySection icon="↗" title="No activity loaded" detail="No record history is available in this snapshot. Check the data notice and refresh to load newly persisted events." />}
     </section>
   );
@@ -357,10 +359,10 @@ function SettingsView({ connectors }: { connectors: ConnectorSummary[] }) {
   const ready = connectors.filter(({ status }) => status === "ready").length;
   return (
     <section className="workspace-section settings-section" id="settings">
-      <div className="section-title-row"><div><p className="eyebrow">Pilot setup</p><h2>Settings</h2></div><span className="queue-count">{ready}/{connectors.length} have required names</span></div>
-      <div className="settings-callout"><div className="settings-callout-icon">⚙</div><div><strong>Read-only setup information</strong><p>This page reports required names in the web-server environment. It cannot change configuration, connect providers or verify the worker environment. An operator must import the pilot mappings, configure providers and verify actual delivery. Refresh the dashboard after setup.</p></div></div>
+      <div className="section-title-row"><div><p className="eyebrow">Authentication and provider setup</p><h2>Settings</h2></div><span className="queue-count">{ready}/{connectors.length} have required names</span></div>
+      <div className="settings-callout"><div className="settings-callout-icon">⚙</div><div><strong>Read-only setup information</strong><p>Auth0 sign-in and active workspace membership control access to private monitoring. Signing in does not connect Slack or GitHub. This panel reports legacy operator configuration names; it cannot change configuration, connect providers or verify the worker environment. An operator must configure mappings and providers and verify actual delivery. Refresh the dashboard after setup.</p></div></div>
       <div className="connector-grid">{connectors.map((connector) => <ConnectorCard connector={connector} expanded={expandedId === connector.id} key={connector.id} onToggle={() => setExpandedId(expandedId === connector.id ? null : connector.id)} />)}</div>
-      <div className="settings-boundaries"><strong>Runtime boundaries</strong><span>Trigger.dev is the background runtime</span><span>OpenRouter is the only model route</span><span>Named Slack approval is required for GitHub actions</span><span>The server selects one configured pilot; no dashboard sign-in is enabled</span></div>
+      <div className="settings-boundaries"><strong>Runtime boundaries</strong><span>Trigger.dev is the background runtime</span><span>OpenRouter is the only model route</span><span>Named Slack approval is required for GitHub actions</span><span>Auth0 membership is resolved on the server; setup configuration does not grant access</span></div>
     </section>
   );
 }
@@ -409,6 +411,7 @@ export function MonitoringDashboard({ data: receivedData }: { data: MonitoringDa
 
   const conversationWorkspace = (
     <ConversationWorkspace
+      available={data.mode === "LIVE"}
       filter={filter}
       filteredConversations={filteredConversations}
       onFilterChange={setFilter}
@@ -429,14 +432,14 @@ export function MonitoringDashboard({ data: receivedData }: { data: MonitoringDa
           <div><strong>Signal</strong><span>Conversation intelligence</span></div>
         </div>
 
-        <button className="workspace-switcher" type="button" onClick={() => navigate("settings")} aria-label="View pilot setup">
+        <button className="workspace-switcher" type="button" onClick={() => navigate("settings")} aria-label="View workspace setup">
           <span className="workspace-avatar">S</span>
-          <span><strong>Signal pilot</strong><small>{data.mode === "LIVE" ? "Authorized pilot snapshot" : "Public setup shell"}</small></span>
+          <span><strong>Signal workspace</strong><small>{data.mode === "LIVE" ? "Authorized workspace snapshot" : "Public setup shell"}</small></span>
           <span className="workspace-chevron" aria-hidden="true">⚙</span>
         </button>
 
         <nav className="primary-nav" aria-label="Primary navigation">
-          {sidebarItems.map((item) => <SidebarNavItem active={section === item.value} count={item.value === "conversations" ? metrics.open : item.value === "decisions" ? metrics.needsHuman : undefined} item={item} key={item.value} onNavigate={navigate} />)}
+          {sidebarItems.map((item) => <SidebarNavItem active={section === item.value} count={data.mode !== "LIVE" ? undefined : item.value === "conversations" ? metrics.open : item.value === "decisions" ? metrics.needsHuman : undefined} item={item} key={item.value} onNavigate={navigate} />)}
         </nav>
 
         <div className="sidebar-rule" />
@@ -447,7 +450,7 @@ export function MonitoringDashboard({ data: receivedData }: { data: MonitoringDa
 
         <div className="sidebar-footer">
           <div className="observer-state"><span className="live-dot live-dot-muted" /><span><strong>{data.mode === "LIVE" ? "Snapshot loaded" : "Data unavailable"}</strong><small>Feed health unverified</small></span></div>
-          <div className="user-row"><span className="user-avatar" aria-hidden="true">S</span><span><strong>Pilot dashboard</strong><small>Read-only · Approvals in Slack</small></span></div>
+          <div className="user-row"><span className="user-avatar" aria-hidden="true">S</span><span><strong>Workspace dashboard</strong><small>Read-only · Approvals in Slack</small></span></div>
         </div>
       </aside>
 
@@ -463,13 +466,13 @@ export function MonitoringDashboard({ data: receivedData }: { data: MonitoringDa
           <div className="section-view">
             {section === "overview" && <OverviewView data={data} metrics={metrics} onDecisionFilter={() => navigate("decisions")} conversationWorkspace={conversationWorkspace} />}
             {section === "conversations" && conversationWorkspace}
-            {section === "decisions" && <DecisionsView conversations={data.conversations} onOpenConversation={openConversation} />}
-            {section === "activity" && <ActivityView conversations={data.conversations} />}
+            {section === "decisions" && <DecisionsView available={data.mode === "LIVE"} conversations={data.conversations} onOpenConversation={openConversation} />}
+            {section === "activity" && <ActivityView available={data.mode === "LIVE"} conversations={data.conversations} />}
             {section === "sources" && <SourcesView connectors={data.connectors} onOpenSettings={() => navigate("settings")} />}
             {section === "settings" && <SettingsView connectors={data.connectors} />}
           </div>
 
-          <footer className="dashboard-footer"><span>Read-only monitoring</span><span>Server-configured pilot · Snapshot may be outdated</span><span>GitHub approvals happen in Slack</span></footer>
+          <footer className="dashboard-footer"><span>Read-only monitoring</span><span>{data.mode === "LIVE" ? "Authorized workspace · Snapshot may be outdated" : "Workspace access and provider setup required"}</span><span>GitHub approvals happen in Slack</span></footer>
         </div>
       </main>
     </div>
