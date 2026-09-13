@@ -22,7 +22,7 @@
 - Preserve the existing uncommitted expiry fix in `src/db/approval-persistence.ts`; do not edit `tasks.md` from feature workers.
 - Do not commit, push, deploy, or contact Auth0/GitHub/Slack during implementation without explicit action-time authorization.
 
-### Task 1: Add Auth0 server client and tenant resolver
+### Task 1: Add Auth0 server client and tenant resolver ✅
 
 **Files:**
 - Create: `src/lib/auth0.ts`

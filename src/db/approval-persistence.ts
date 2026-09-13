@@ -230,7 +230,7 @@ export async function loadProposalForApproval(db: SignalDb, input: { tenantId: s
       .innerJoin(threads, and(eq(threads.tenantId, proposals.tenantId), eq(threads.id, proposals.threadId)))
       .innerJoin(channelMappings, and(eq(channelMappings.tenantId, threads.tenantId), eq(channelMappings.channelId, threads.channelId)))
       .where(and(eq(proposals.tenantId, input.tenantId), eq(proposals.id, input.proposalId), sql`${proposals.expiresAt} = date_trunc('milliseconds', ${proposals.expiresAt})`)).limit(1);
-    if (!row) return null;
+    if (!row || !validId(row.tenant.slackTeamId)) return null;
     try {
       const mutation = immutableMutation(row.proposal);
       configured({ ...row, mutation });

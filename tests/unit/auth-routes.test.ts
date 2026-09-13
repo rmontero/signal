@@ -497,7 +497,11 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
     registerHooks({ resolve(specifier, context, nextResolve) {
       return specifier === "server-only"
         ? { url: "data:text/javascript,export {};", shortCircuit: true }
-        : nextResolve(specifier, context);
+        : /\/db\/client(?:\.ts)?$/.test(specifier)
+          ? { url: "data:text/javascript,export function createDb(){return {db:{},pool:{end:async()=>{}}};}", shortCircuit: true }
+          : /\/db\/membership-repository(?:\.ts)?$/.test(specifier)
+            ? { url: "data:text/javascript,export async function findMembershipBySubject(){return {subject:'auth0|fixture',tenantId:'tenant-fixture',role:'OWNER',active:true,tenantActive:true};}", shortCircuit: true }
+            : nextResolve(specifier, context);
     } });
     const issuer = process.env.AUTH0_ISSUER_BASE_URL + "/";
     const base = process.env.AUTH0_BASE_URL;
@@ -566,7 +570,9 @@ test("real SDK callback retains PKCE, state and token-claim validation through t
         assert.equal(response.headers.getSetCookie().some((cookie) => cookie.startsWith("__session=")), false);
       }
     }
-    assert.equal(discoveryRequests, 1);
+    // The login and callback route clients each perform one independently
+    // cached discovery lookup in this isolated process.
+    assert.equal(discoveryRequests, 2);
     assert.equal(tokenRequests, 11);
     console.log("PKCE/state/token-claim checks passed; external requests: 0");
   `], { cwd: fileURLToPath(new URL("../../", import.meta.url)), env: process.env, encoding: "utf8", timeout: 10_000 });
