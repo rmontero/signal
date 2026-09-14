@@ -4,7 +4,7 @@ This is the sole execution ledger. Read [north_star.md](north_star.md), [roadmap
 
 ## Current step
 
-**User-directed stop and Git-only closeout — 2026-09-13:** Implementation and all agents are stopped. The subsequent request authorizes merging the saved Auth0/tenant-connection work into `main` and pushing to `origin/main` only. Historical in-progress rows below do not authorize restarting implementation or deployment.
+**User-directed stop and Git-only closeout — 2026-09-13:** Implementation and all agents are stopped. The saved Auth0/tenant-connection work was merged into `main` in `170f5f1` and its push to `origin/main` was verified. Historical in-progress rows below do not authorize restarting implementation or deployment.
 
 **Documentation milestone stopped — 2026-09-11.** The implementation clock was not started at that stopping point; use [HANDOFF.md](docs/HANDOFF.md). The current user-directed session has resumed the full roadmap and is implementing the remaining critical path. Do not resume overnight or dispatch Astra automatically.
 
@@ -17,7 +17,7 @@ Implementation clock: **STARTED 2026-09-12 01:15 UTC** when I-01 was claimed; tw
 
 | ID | Task | Depends on | Track / owner-model | Status | Evidence / next action |
 |---|---|---|---|---|---|
-| GIT-01 | Preserve and merge the stopped Auth0/tenant-connection checkpoint, then push main | Explicit user request after abort | Rob / coordinator only | IN_PROGRESS | Claimed 2026-09-14 02:07 UTC; saved work through `088df3e` merged without conflicts. Node 24: 605 unit tests, typecheck, lint, build, documentation and isolated migration checks PASS; outgoing credential scan PASS. Commit/push confirmation is next; agents and implementation remain stopped |
+| GIT-01 | Preserve and merge the stopped Auth0/tenant-connection checkpoint, then push main | Explicit user request after abort | Rob / coordinator only | DONE | Claimed 2026-09-14 02:07 UTC; saved work through `088df3e` merged without conflicts in `170f5f1` and pushed to `origin/main`, with remote hash equality verified. Node 24: 605 unit tests, typecheck, lint, build, documentation and isolated migration checks PASS; outgoing credential scan PASS. Agents and implementation remain stopped |
 | D-01 | Canonical north star, roadmap, agent rules, source preservation, task briefs | — | Rob / coordinator | DONE | Root guides, task plan, configuration examples and checker verified; M0 accepted |
 | D-02 | Architecture, typed contracts, infrastructure, SaaS boundaries | D-01 contracts briefing | Rob / historical Astra | DONE | [Delivery report](docs/reviews/D-02.md); accepted by D-05 after contract alignment |
 | D-03 | Verification matrix, operations, two-minute demo | D-01 contracts briefing | Rob / historical Luna | DONE | [Delivery report](docs/reviews/D-03.md); recovery rules and real-identity demo reviewed |
@@ -116,6 +116,8 @@ Statuses: `TODO`, `READY`, `IN_PROGRESS`, `REVIEW`, `DONE`, `BLOCKED`, `OPTIONAL
 - **B-OBS-01 — LIVE OBSERVER ACTIVATION PENDING:** Observer routes are deployed and reachable at `https://www.sgn.lol/api/slack/events` and `https://www.sgn.lol/api/github/webhooks`; unsigned smoke requests correctly return `401`, and the refreshed production `/healthz` returns `200`. The remaining required state is to configure the Vercel runtime variables (`SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, and `GITHUB_WEBHOOK_SECRET`), import a validated active `channel_mappings` row with the real Slack team/channel and GitHub repository/installation IDs plus approvers/identities, then register the Slack Events API and GitHub webhook URLs. Do not treat the existing diagnostic mapping as production configuration.
 
 ## Evidence log
+
+- GIT-01 — 2026-09-14: **PASS** — `git push origin main` advanced the remote from `f0fc588` to merge commit `170f5f1`. `git rev-parse main origin/main` and `git ls-remote --heads origin main` returned the same full commit; both the main checkout and saved feature worktree were clean. The feature branch/worktree and four existing Tower auto-stashes were preserved. No new implementation agents or explicit deployment commands were started. No next implementation task is authorized by this Git-only closeout.
 
 - GIT-01 — 2026-09-14: **PASS** — Saved the remaining reviewed-task completion notes in `088df3e` and merged the complete feature branch into the existing `main` checkout without conflicts. On the merged tree with Node `v24.20.0`, `npm run test:unit` passed 605/605; `npm run typecheck`, `npm run lint`, `npm run build`, `npm run docs:check`, `npm run test:migrations` and `git diff --cached --check` passed. The migration check applied all 11 migrations transactionally to disposable PostgreSQL 18 and removed its container; no application data was used. Outgoing feature history was checked for known local credentials, provider-token patterns and private/generated paths, with no findings. **NOT RUN:** database repository integration suite, browser/live provider acceptance, production migrations and explicit deployment commands. The implementation remains paused; this is a Git checkpoint, not release acceptance.
 
