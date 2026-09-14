@@ -31,9 +31,10 @@ function fixture() {
   let now = new Date("2026-09-13T00:00:00Z");
   let authority: ViewerTenant | null = viewer;
   let encryptionKey = key;
+  let generation = 1;
   const rows = new Map<string, OAuthStateRecord>();
   const store: OAuthStateStore = {
-    async save(row) { rows.set(row.stateHash, { ...row, consumedAt: null }); },
+    async save(row, sealPayload) { rows.set(row.stateHash, { ...row, encryptedPayload: sealPayload(generation), consumedAt: null }); },
     async read(query) {
       const row = rows.get(query.stateHash);
       return row && row.tenantId === query.tenantId && row.subject === query.subject && row.provider === query.provider && !row.consumedAt ? { ...row } : null;
@@ -49,7 +50,7 @@ function fixture() {
     },
   };
   const service = createOAuthStateService({ store, resolveViewerTenant: async () => authority, getEncryptionKey: () => encryptionKey, now: () => now });
-  return { service, store, rows, setNow(value: string) { now = new Date(value); }, setViewer(value: ViewerTenant | null) { authority = value; }, setKey(value: string) { encryptionKey = value; } };
+  return { service, store, rows, setNow(value: string) { now = new Date(value); }, setViewer(value: ViewerTenant | null) { authority = value; }, setKey(value: string) { encryptionKey = value; }, setGeneration(value: number) { generation = value; } };
 }
 
 test("OAuth state is opaque, stored by hash, and keeps PKCE and nonce encrypted", async () => {
@@ -65,6 +66,7 @@ test("OAuth state is opaque, stored by hash, and keeps PKCE and nonce encrypted"
   const result = await service.consumeOAuthState(state, callback);
   assert.equal(result.tenantId, viewer.tenantId);
   assert.equal(result.returnTo, input.returnTo);
+  assert.deepEqual(result.completion, { tenantId: viewer.tenantId, subject: viewer.subject, provider: "slack", stateHash: hash, generation: 1 });
   assert.match(result.nonce, /^[A-Za-z0-9_-]{43}$/);
   assert.match(result.pkceVerifier!, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(authorization.codeChallenge, createHash("sha256").update(result.pkceVerifier!).digest("base64url"));
@@ -96,6 +98,32 @@ test("each OAuth attempt has independent state, nonce and verifier", async () =>
   const b = await service.consumeOAuthState(second, callback);
   assert.notEqual(a.nonce, b.nonce);
   assert.notEqual(a.pkceVerifier, b.pkceVerifier);
+});
+
+test("completion retains the generation sealed at issuance and never refreshes it during consume", async () => {
+  const { service, rows, setGeneration } = fixture();
+  setGeneration(7);
+  const old = await service.createOAuthState({ ...input, generation: 999 } as typeof input);
+  setGeneration(8);
+  const fresh = await service.createOAuthState(input);
+  const oldResult = await service.consumeOAuthState(old, callback);
+  const freshResult = await service.consumeOAuthState(fresh, callback);
+  assert.equal(oldResult.completion.generation, 7);
+  assert.equal(freshResult.completion.generation, 8);
+  for (const row of rows.values()) assert.ok(Number.isSafeInteger(JSON.parse(openConnectionSecret(row.encryptedPayload, key)).generation));
+});
+
+test("state without a valid authenticated generation cannot return completion material", async () => {
+  for (const generation of [undefined, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+    const { service, rows } = fixture();
+    const state = await service.createOAuthState(input);
+    const row = [...rows.values()][0];
+    const payload = JSON.parse(openConnectionSecret(row.encryptedPayload, key));
+    payload.generation = generation;
+    row.encryptedPayload = sealConnectionSecret(JSON.stringify(payload), key);
+    await assert.rejects(service.consumeOAuthState(state, callback));
+    await assert.rejects(service.consumeOAuthState(state, callback));
+  }
 });
 
 test("state can be consumed only once, including overlapping callbacks", async () => {
@@ -211,7 +239,7 @@ test("state storage and session failures reveal no identity, key, token, payload
 // pretending this driver double proves PostgreSQL execution or isolation.
 function sqlFixture(authority: ViewerTenant | null = viewer) {
   const statements: Array<{ text: string; values: unknown[] }> = [];
-  let members: unknown[][] = [[viewer.subject, viewer.tenantId, "OWNER", true, true]];
+  let members: unknown[][] = [[viewer.subject, viewer.tenantId, "OWNER", true, true, 1]];
   let failSql = "";
   const connection: typeof providerConnections.$inferSelect = {
     tenantId: viewer.tenantId, id: "connection-1", provider: "slack", externalAccountId: "team-1", installationId: null,
@@ -221,9 +249,13 @@ function sqlFixture(authority: ViewerTenant | null = viewer) {
   };
   const state: OAuthStateRecord = {
     tenantId: viewer.tenantId, subject: viewer.subject, provider: "slack", stateHash: "a".repeat(64),
-    returnTo: "/settings", encryptedPayload: sealConnectionSecret("fixture-payload", key),
-    createdAt: new Date(), expiresAt: new Date(Date.now() + 600_000), consumedAt: null,
+    returnTo: "/settings", encryptedPayload: "",
+    createdAt: new Date(), expiresAt: new Date(Date.now() + 600_000), consumedAt: new Date(),
   };
+  state.encryptedPayload = sealConnectionSecret(JSON.stringify({
+    version: 1, tenantId: state.tenantId, subject: state.subject, provider: state.provider, stateHash: state.stateHash,
+    returnTo: state.returnTo, expiresAt: state.expiresAt.toISOString(), generation: 1,
+  }), key);
   function wireRow(table: Table, row: Record<string, unknown>) {
     return Object.keys(getTableColumns(table)).map((column) => row[column] instanceof Date ? row[column].toISOString() : row[column]);
   }
@@ -232,15 +264,16 @@ function sqlFixture(authority: ViewerTenant | null = viewer) {
       statements.push({ text: query.text, values });
       if (failSql && query.text.includes(failSql)) throw new Error(`PRIVATE_SQL ${key} private-token-marker`, { cause: "private-payload" });
       if (query.text.includes('from "tenant_memberships"')) return { rows: members };
+      if (query.text.includes('from "oauth_states"')) return { rows: state.consumedAt && values.includes(state.stateHash) && values.includes(state.provider) ? [wireRow(oauthStates, state)] : [] };
       if (query.text.includes('"provider_connections"') && /^(select|insert|update)/.test(query.text)) return { rows: [wireRow(providerConnections, connection)] };
       if (query.text.startsWith('update "oauth_states"') && query.text.includes("returning")) return { rows: [wireRow(oauthStates, state)] };
       return { rows: [] };
     },
   } as unknown as Pool, { schema });
   const repo = createConnectionRepository({ resolveViewerTenant: async () => authority, getEncryptionKey: () => key });
-  const slack = { provider: "slack" as const, externalAccountId: "team-1", botUserId: "bot-1", displayName: "Fixture", scopes: ["chat:write"], encryptedSecret: connection.encryptedSecret! };
   const query = { tenantId: viewer.tenantId, subject: viewer.subject, provider: "slack" as const, stateHash: state.stateHash };
-  return { db, repo, statements, connection, state, slack, query, setMembers(value: unknown[][]) { members = value; }, failOn(value: string) { failSql = value; } };
+  const slack = { provider: "slack" as const, externalAccountId: "team-1", botUserId: "bot-1", displayName: "Fixture", scopes: ["chat:write"], encryptedSecret: connection.encryptedSecret!, completion: { ...query, generation: 1 } };
+  return { db, repo, statements, connection, state, slack, query, setMembers(value: unknown[][]) { members = value.map((row) => [...row, 1]); }, setGeneration(value: number) { members = members.map((row) => [...row.slice(0, 5), value]); }, failOn(value: string) { failSql = value; } };
 }
 
 test("connection repository rejects untrusted and stale authority before any mutation", async () => {
@@ -275,6 +308,48 @@ test("upsert uses persisted tenant authority and omits credentials from its resu
   assert.equal(insert.values.includes("browser-subject"), false);
   assert.match(insert.text, /on conflict \("tenant_id","provider"\)/);
   assert.match(statements.find((query) => query.text.includes('from "tenant_memberships"'))!.text, /for update/);
+  assert.equal(statements.at(-1)?.text, "commit");
+});
+
+test("completion fence rejects stale or forged generations and missing/mismatched persisted bindings", async () => {
+  for (const mode of ["stale", "forged-generation", "missing", "tenant", "subject", "provider", "state", "unconsumed", "tampered-envelope"] as const) {
+    const { db, repo, slack, state, statements, setGeneration } = sqlFixture();
+    if (mode === "stale" || mode === "forged-generation") setGeneration(2);
+    if (mode === "forged-generation") slack.completion.generation = 2;
+    if (mode === "missing") slack.completion = undefined as never;
+    if (mode === "tenant") slack.completion.tenantId = "other-tenant";
+    if (mode === "subject") slack.completion.subject = "auth0|other";
+    if (mode === "provider") slack.completion.provider = "github" as never;
+    if (mode === "state") slack.completion.stateHash = "b".repeat(64);
+    if (mode === "unconsumed") state.consumedAt = null;
+    if (mode === "tampered-envelope") state.encryptedPayload = "private-tampered-envelope";
+    await assert.rejects(repo.upsertProviderConnection(db, slack), /^Error: Provider connection is unavailable\.$/);
+    assert.equal(statements.some((query) => /^(insert|update)/.test(query.text)), false);
+    assert.equal(statements.at(-1)?.text, "rollback");
+  }
+});
+
+test("completion checks its consumed state and expiry while holding tenant and state locks", async () => {
+  const { db, repo, slack, statements } = sqlFixture();
+  await repo.upsertProviderConnection(db, slack);
+  const tenantLock = statements.findIndex((query) => query.text.includes('from "tenant_memberships"') && query.text.includes("for update"));
+  const stateLock = statements.findIndex((query) => query.text.includes('from "oauth_states"') && query.text.includes("for update"));
+  const insert = statements.findIndex((query) => query.text.startsWith('insert into "provider_connections"'));
+  assert.ok(tenantLock >= 0 && tenantLock < stateLock && stateLock < insert);
+  assert.match(statements[tenantLock].text, /"tenants"\."config_version"/);
+  assert.match(statements[stateLock].text, /"consumed_at" is not null/);
+  assert.match(statements[stateLock].text, /"expires_at" > clock_timestamp\(\)/);
+  assert.deepEqual(statements[stateLock].values, [viewer.tenantId, viewer.subject, "slack", "a".repeat(64)]);
+});
+
+test("a repeated disconnect advances cancellation even with an already-revoked connection", async () => {
+  const { db, repo, connection, statements } = sqlFixture();
+  connection.status = "REVOKED";
+  connection.encryptedSecret = null;
+  connection.revokedAt = new Date();
+  assert.equal((await repo.revokeProviderConnection(db, { provider: "slack" })).status, "REVOKED");
+  assert.ok(statements.some((query) => query.text.startsWith('update "tenants"') && query.text.includes('"config_version" + 1')));
+  assert.equal(statements.some((query) => query.text.startsWith('insert into "audit"')), false);
   assert.equal(statements.at(-1)?.text, "commit");
 });
 

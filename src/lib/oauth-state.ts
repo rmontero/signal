@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { createDb, type SignalDb } from "../db/client";
-import { readOAuthState, storeOAuthState, takeOAuthState, type ConnectionProvider, type NewOAuthState, type OAuthStateQuery, type OAuthStateRecord } from "../db/connection-repository";
+import { readOAuthState, storeOAuthState, takeOAuthState, type ConnectionProvider, type NewOAuthState, type OAuthStateQuery, type OAuthStateRecord, type OAuthStateSealer, type ProviderConnectionCompletion } from "../db/connection-repository";
 import { requireTenantAdmin } from "../db/membership-repository";
 import { validateReturnTo } from "./auth0";
 import { openConnectionSecret, sealConnectionSecret } from "./connection-crypto";
@@ -9,10 +9,11 @@ import { resolveViewerTenant, type ViewerTenant } from "./tenant-context";
 
 type CreateInput = { tenantId: string; subject: string; provider: ConnectionProvider; returnTo: string };
 type CallbackInput = { subject: string; provider: ConnectionProvider };
-// Extended server-only callback result. Callers must not serialize nonce/verifier.
-type ConsumedState = { tenantId: string; returnTo: string; nonce: string; pkceVerifier: string | null };
+// Server-only callback material: forward completion unchanged to upsert and
+// never serialize completion, nonce or verifier into a browser response.
+type ConsumedState = { tenantId: string; returnTo: string; nonce: string; pkceVerifier: string | null; completion: ProviderConnectionCompletion };
 export interface OAuthStateStore {
-  save(record: NewOAuthState): Promise<void>;
+  save(record: NewOAuthState, sealPayload: OAuthStateSealer): Promise<void>;
   read(query: OAuthStateQuery): Promise<OAuthStateRecord | null>;
   consume(query: OAuthStateQuery): Promise<OAuthStateRecord | null>;
 }
@@ -62,8 +63,12 @@ export function createOAuthStateService(dependencies: OAuthStateDependencies) {
     const bound = payload as Record<string, unknown>;
     if (bound.version !== 1 || bound.tenantId !== row.tenantId || bound.subject !== row.subject || bound.provider !== row.provider
       || bound.stateHash !== row.stateHash || bound.returnTo !== row.returnTo || bound.expiresAt !== row.expiresAt.toISOString()
+      || typeof bound.generation !== "number" || !Number.isSafeInteger(bound.generation) || bound.generation < 1
       || !validToken(bound.nonce) || (row.provider === "slack" ? !validToken(bound.pkceVerifier) : bound.pkceVerifier !== null)) throw new Error();
-    return { tenantId: viewer.tenantId, returnTo: returnPath(row.returnTo), nonce: bound.nonce, pkceVerifier: bound.pkceVerifier as string | null };
+    return {
+      tenantId: viewer.tenantId, returnTo: returnPath(row.returnTo), nonce: bound.nonce, pkceVerifier: bound.pkceVerifier as string | null,
+      completion: { ...query, generation: bound.generation },
+    };
   }
 
   return {
@@ -76,11 +81,14 @@ export function createOAuthStateService(dependencies: OAuthStateDependencies) {
         const stateHash = digest(state);
         const createdAt = now();
         const expiresAt = new Date(createdAt.getTime() + 600_000);
-        const encryptedPayload = sealConnectionSecret(JSON.stringify({
+        const payload = {
           version: 1, stateHash, tenantId: viewer.tenantId, subject: viewer.subject, provider: input.provider, returnTo,
           expiresAt: expiresAt.toISOString(), nonce: randomToken(), pkceVerifier: input.provider === "slack" ? randomToken() : null,
-        }), dependencies.getEncryptionKey());
-        await dependencies.store.save({ tenantId: viewer.tenantId, subject: viewer.subject, provider: input.provider, stateHash, returnTo, encryptedPayload, createdAt, expiresAt });
+        };
+        await dependencies.store.save(
+          { tenantId: viewer.tenantId, subject: viewer.subject, provider: input.provider, stateHash, returnTo, createdAt, expiresAt },
+          (generation) => sealConnectionSecret(JSON.stringify({ ...payload, generation }), dependencies.getEncryptionKey()),
+        );
         return state;
       } catch { throw new Error(unavailable); }
     },
@@ -120,7 +128,7 @@ async function withDatabase<T>(work: (db: SignalDb) => Promise<T>): Promise<T> {
 export const { createOAuthState, consumeOAuthState, getOAuthStateAuthorization } = createOAuthStateService({
   resolveViewerTenant, getEncryptionKey: () => process.env.CONNECTIONS_ENCRYPTION_KEY ?? "",
   store: {
-    save: (row) => withDatabase((db) => storeOAuthState(db, row)),
+    save: (row, sealPayload) => withDatabase((db) => storeOAuthState(db, row, sealPayload)),
     read: (query) => withDatabase((db) => readOAuthState(db, query)),
     consume: (query) => withDatabase((db) => takeOAuthState(db, query)),
   },

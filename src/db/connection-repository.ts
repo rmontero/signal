@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { validateReturnTo } from "../lib/auth0";
 import { openConnectionSecret } from "../lib/connection-crypto";
 import { resolveViewerTenant, type ViewerTenant } from "../lib/tenant-context";
@@ -11,11 +11,13 @@ import { audit, channelMappings, oauthStates, providerConnections, tenantMembers
 type Transaction = Parameters<Parameters<SignalDb["transaction"]>[0]>[0];
 export type ConnectionProvider = "github" | "slack";
 export type OAuthStateRecord = typeof oauthStates.$inferSelect;
-export type NewOAuthState = Omit<OAuthStateRecord, "consumedAt">;
+export type NewOAuthState = Omit<OAuthStateRecord, "consumedAt" | "encryptedPayload">;
 export type OAuthStateQuery = Pick<OAuthStateRecord, "tenantId" | "subject" | "provider" | "stateHash">;
+export type ProviderConnectionCompletion = OAuthStateQuery & { generation: number };
+export type OAuthStateSealer = (generation: number) => string;
 type Connection = typeof providerConnections.$inferSelect;
 export type SafeConnectionSummary = Pick<Connection, "provider" | "externalAccountId" | "installationId" | "botUserId" | "displayName" | "scopes" | "status" | "createdAt" | "updatedAt" | "revokedAt"> & { connectionId: string };
-type ConnectionInput = { externalAccountId: string; displayName: string; scopes: string[] } & (
+type ConnectionInput = { externalAccountId: string; displayName: string; scopes: string[]; completion: ProviderConnectionCompletion } & (
   | { provider: "github"; installationId: string; encryptedSecret?: never; botUserId?: never }
   | { provider: "slack"; botUserId: string; encryptedSecret: string; installationId?: never }
 );
@@ -29,6 +31,17 @@ const unavailable = "Provider connection is unavailable.";
 const localOrigin = "https://signal.invalid";
 const validId = (value: unknown): value is string => typeof value === "string" && /^[!-~]{1,255}$/.test(value);
 const validProvider = (value: unknown): value is ConnectionProvider => value === "github" || value === "slack";
+const validGeneration = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+function persistedCompletion(row: OAuthStateRecord, key: string): ProviderConnectionCompletion {
+  const payload: unknown = JSON.parse(openConnectionSecret(row.encryptedPayload, key));
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
+  const bound = payload as Record<string, unknown>;
+  if (bound.version !== 1 || !validGeneration(bound.generation) || bound.tenantId !== row.tenantId
+    || bound.subject !== row.subject || bound.provider !== row.provider || bound.stateHash !== row.stateHash
+    || bound.returnTo !== row.returnTo || bound.expiresAt !== row.expiresAt.toISOString()) throw new Error();
+  return { tenantId: row.tenantId, subject: row.subject, provider: row.provider, stateHash: row.stateHash, generation: bound.generation };
+}
 
 function summary(row: Connection): SafeConnectionSummary {
   // Explicit allowlist: never return an ORM row or encrypted credentials.
@@ -65,9 +78,9 @@ async function invalidateConfiguration(tx: Transaction, tenantId: string) {
 }
 
 /** Server composition seam, never a Server Action. Production exports resolve
- * their own server session; mutation inputs contain no tenant, role or subject. */
+ * their own server session; supplied completion bindings never grant authority. */
 export function createConnectionRepository(dependencies: ConnectionRepositoryDependencies) {
-  async function asAdmin<T>(db: SignalDb, work: (tx: Transaction, viewer: ViewerTenant) => Promise<T>): Promise<T> {
+  async function asAdmin<T>(db: SignalDb, work: (tx: Transaction, viewer: ViewerTenant, generation: number) => Promise<T>): Promise<T> {
     try {
       const viewer = await dependencies.resolveViewerTenant();
       requireTenantAdmin(viewer);
@@ -77,14 +90,14 @@ export function createConnectionRepository(dependencies: ConnectionRepositoryDep
         // memberships, as in the existing subject bootstrap repository.
         const rows = await tx.select({
           subject: tenantMemberships.auth0Subject, tenantId: tenantMemberships.tenantId,
-          role: tenantMemberships.role, active: tenantMemberships.active, tenantActive: tenants.active,
+          role: tenantMemberships.role, active: tenantMemberships.active, tenantActive: tenants.active, generation: tenants.configVersion,
         }).from(tenantMemberships).innerJoin(tenants, eq(tenantMemberships.tenantId, tenants.id))
           .where(eq(tenantMemberships.auth0Subject, viewer.subject)).limit(2).for("update");
         const member = rows[0];
         if (rows.length !== 1 || member.subject !== viewer.subject || member.tenantId !== viewer.tenantId
-          || member.active !== true || member.tenantActive !== true) throw new Error();
+          || member.active !== true || member.tenantActive !== true || !validGeneration(member.generation)) throw new Error();
         requireTenantAdmin(member);
-        return work(tx, member);
+        return work(tx, member, member.generation);
       }, { isolationLevel: "read committed" });
     } catch {
       // In particular, do not propagate Drizzle errors (SQL + secret parameters).
@@ -105,7 +118,18 @@ export function createConnectionRepository(dependencies: ConnectionRepositoryDep
 
   return {
     async upsertProviderConnection(db: SignalDb, input: ConnectionInput): Promise<SafeConnectionSummary> {
-      return asAdmin(db, async (tx, viewer) => {
+      return asAdmin(db, async (tx, viewer, generation) => {
+        if (!input || !validProvider(input.provider)) throw new Error();
+        const completion = input.completion;
+        checkStateQuery(completion, viewer);
+        if (completion.provider !== input.provider || !validGeneration(completion.generation) || completion.generation !== generation) throw new Error();
+        const [state] = await tx.select().from(oauthStates).where(and(
+          eq(oauthStates.tenantId, viewer.tenantId), eq(oauthStates.subject, viewer.subject), eq(oauthStates.provider, input.provider),
+          eq(oauthStates.stateHash, completion.stateHash), isNotNull(oauthStates.consumedAt), sql`${oauthStates.expiresAt} > clock_timestamp()`,
+        )).for("update");
+        // Never trust a caller to refresh the captured generation. Authenticate
+        // it against the persisted consumed state while the tenant row is locked.
+        if (!state || persistedCompletion(state, dependencies.getEncryptionKey()).generation !== generation) throw new Error();
         const values = connectionValues(input, dependencies.getEncryptionKey);
         const [previous] = await tx.select().from(providerConnections)
           .where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, input.provider)));
@@ -130,36 +154,38 @@ export function createConnectionRepository(dependencies: ConnectionRepositoryDep
         const [previous] = await tx.select().from(providerConnections)
           .where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, input.provider)));
         if (!previous) throw new Error();
-        const disabled = await disableMappings(tx, viewer.tenantId);
+        await disableMappings(tx, viewer.tenantId);
         // Burn outstanding unconsumed callbacks as part of disconnect.
         await tx.update(oauthStates).set({ consumedAt: sql`clock_timestamp()` }).where(and(
           eq(oauthStates.tenantId, viewer.tenantId), eq(oauthStates.provider, input.provider), isNull(oauthStates.consumedAt),
         ));
-        if (previous.status === "REVOKED") {
-          if (disabled.length) await invalidateConfiguration(tx, viewer.tenantId);
-          return summary(previous);
-        }
+        // Every disconnect, including a repeated one, cancels already-consumed
+        // callbacks. The same tenant lock fences issuance, completion and revoke.
+        await invalidateConfiguration(tx, viewer.tenantId);
+        if (previous.status === "REVOKED") return summary(previous);
         const [row] = await tx.update(providerConnections).set({ status: "REVOKED", encryptedSecret: null, revokedAt: sql`clock_timestamp()`, updatedAt: sql`clock_timestamp()` })
           .where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.id, previous.id))).returning();
         if (!row) throw new Error();
-        await invalidateConfiguration(tx, viewer.tenantId);
         await tx.insert(audit).values({ tenantId: viewer.tenantId, id: randomUUID(), entityType: "provider_connection", entityId: row.id, fromState: previous.status, toState: "REVOKED" });
         return summary(row);
       });
     },
 
-    async storeOAuthState(db: SignalDb, input: NewOAuthState): Promise<void> {
-      return asAdmin(db, async (tx, viewer) => {
+    async storeOAuthState(db: SignalDb, input: NewOAuthState, sealPayload: OAuthStateSealer): Promise<void> {
+      return asAdmin(db, async (tx, viewer, generation) => {
         checkStateQuery(input, viewer);
         if (typeof input.returnTo !== "string" || validateReturnTo(input.returnTo, localOrigin) !== input.returnTo
           || !(input.createdAt instanceof Date) || !(input.expiresAt instanceof Date)
           || !Number.isFinite(input.createdAt.getTime()) || !Number.isFinite(input.expiresAt.getTime())
           || input.expiresAt.getTime() <= Date.now() || input.expiresAt.getTime() <= input.createdAt.getTime()
-          || input.expiresAt.getTime() - input.createdAt.getTime() > 600_000
-          || !openConnectionSecret(input.encryptedPayload, dependencies.getEncryptionKey())) throw new Error();
+          || input.expiresAt.getTime() - input.createdAt.getTime() > 600_000 || typeof sealPayload !== "function") throw new Error();
+        // Seal after locking persisted authority, not from an unlocked precheck.
+        // Generation lives inside the authenticated, persisted OAuth envelope.
+        const encryptedPayload = sealPayload(generation);
+        if (persistedCompletion({ ...input, encryptedPayload, consumedAt: null }, dependencies.getEncryptionKey()).generation !== generation) throw new Error();
         await tx.insert(oauthStates).values({
           tenantId: viewer.tenantId, subject: viewer.subject, stateHash: input.stateHash, provider: input.provider,
-          returnTo: input.returnTo, encryptedPayload: input.encryptedPayload, createdAt: input.createdAt, expiresAt: input.expiresAt,
+          returnTo: input.returnTo, encryptedPayload, createdAt: input.createdAt, expiresAt: input.expiresAt,
         });
       });
     },

@@ -66,22 +66,32 @@ if (!process.env.DATABASE_URL) {
     const repo = repository();
     const service = createOAuthStateService({
       resolveViewerTenant: async () => viewer, getEncryptionKey: () => key,
-      store: { save: (row) => repo.storeOAuthState(db, row), read: (query) => repo.readOAuthState(db, query), consume: (query) => repo.takeOAuthState(db, query) },
+      store: { save: (row, sealPayload) => repo.storeOAuthState(db, row, sealPayload), read: (query) => repo.readOAuthState(db, query), consume: (query) => repo.takeOAuthState(db, query) },
     });
     const slack = { provider: "slack" as const, externalAccountId: "team-1", botUserId: "bot-1", displayName: "Fixture workspace", encryptedSecret: sealConnectionSecret(token, key), scopes: ["chat:write", "app_mentions:read"] };
     const github = { provider: "github" as const, externalAccountId: "account-1", installationId: "installation-1", displayName: "Fixture account", scopes: ["issues:write"] };
     const stateInput = { ...viewer, provider: "slack" as const, returnTo: "/settings" };
     const callback = { subject: viewer.subject, provider: "slack" as const };
-    return { viewer, repo, repository, service, slack, github, channelId, stateInput, callback };
+    async function authorize<T extends { provider: "slack" | "github" }>(input: T) {
+      const state = await service.createOAuthState({ ...stateInput, provider: input.provider });
+      const { completion } = await service.consumeOAuthState(state, { ...callback, provider: input.provider });
+      return { ...input, completion };
+    }
+    return { viewer, repo, repository, service, slack, github, channelId, stateInput, callback, authorize };
   }
 
   integration("upsert is tenant/provider unique, encrypted, and returns only safe fields", async () => {
-    const { viewer, repo, slack, github } = await fixture();
-    const results = await Promise.all(Array.from({ length: 4 }, () => repo.upsertProviderConnection(db, slack)));
-    assert.equal(new Set(results.map((row) => row.connectionId)).size, 1);
-    const createdAt = results[0].createdAt;
-    const updated = await repo.upsertProviderConnection(db, { ...slack, displayName: "Updated name" });
-    assert.equal(updated.connectionId, results[0].connectionId);
+    const { viewer, repo, slack, github, authorize } = await fixture();
+    const attempts = await Promise.all(Array.from({ length: 4 }, () => authorize(slack)));
+    const results = await Promise.allSettled(attempts.map((input) => repo.upsertProviderConnection(db, input)));
+    const successful = results.filter((result) => result.status === "fulfilled");
+    // The first write advances the tenant generation; competing old completions
+    // cannot subsequently overwrite its newly established connection.
+    assert.equal(successful.length, 1);
+    const created = successful[0].value;
+    const createdAt = created.createdAt;
+    const updated = await repo.upsertProviderConnection(db, await authorize({ ...slack, displayName: "Updated name" }));
+    assert.equal(updated.connectionId, created.connectionId);
     assert.deepEqual(updated.createdAt, createdAt);
     assert.equal(updated.status, "ACTIVE");
     assert.equal(updated.displayName, "Updated name");
@@ -90,7 +100,7 @@ if (!process.env.DATABASE_URL) {
     const [stored] = await db.select().from(providerConnections).where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, "slack")));
     assert.equal(openConnectionSecret(stored.encryptedSecret!, key), token);
     assert.equal(await db.$count(providerConnections, eq(providerConnections.tenantId, viewer.tenantId)), 1);
-    const installed = await repo.upsertProviderConnection(db, github);
+    const installed = await repo.upsertProviderConnection(db, await authorize(github));
     assert.equal(installed.installationId, "installation-1");
     assert.equal(await db.$count(providerConnections, eq(providerConnections.tenantId, viewer.tenantId)), 2);
   });
@@ -98,28 +108,30 @@ if (!process.env.DATABASE_URL) {
   integration("browser tenant/role/subject fields cannot select or elevate authority", async () => {
     const a = await fixture();
     const b = await fixture();
-    await a.repo.upsertProviderConnection(db, { ...a.slack, tenantId: b.viewer.tenantId, subject: b.viewer.subject, role: "OWNER", viewer: b.viewer } as typeof a.slack);
+    await a.repo.upsertProviderConnection(db, await a.authorize({ ...a.slack, tenantId: b.viewer.tenantId, subject: b.viewer.subject, role: "OWNER", viewer: b.viewer }));
     assert.equal(await db.$count(providerConnections, eq(providerConnections.tenantId, b.viewer.tenantId)), 0);
-    await b.repo.upsertProviderConnection(db, b.slack);
+    await b.repo.upsertProviderConnection(db, await b.authorize(b.slack));
     await a.repo.revokeProviderConnection(db, { provider: "slack", tenantId: b.viewer.tenantId } as { provider: "slack" });
     const [other] = await db.select().from(providerConnections).where(eq(providerConnections.tenantId, b.viewer.tenantId));
     assert.equal(other.status, "ACTIVE");
+    const admitted = await a.authorize(a.slack);
     for (const denied of [null, { ...a.viewer, role: "MEMBER" as const }, { ...a.viewer, tenantId: b.viewer.tenantId }, { ...a.viewer, subject: "auth0|unknown" }]) {
-      await assert.rejects(a.repository(denied).upsertProviderConnection(db, a.slack));
+      await assert.rejects(a.repository(denied).upsertProviderConnection(db, admitted));
       await assert.rejects(a.repository(denied).revokeProviderConnection(db, { provider: "slack" }));
     }
   });
 
   for (const revoked of ["role", "membership", "tenant", "ambiguous"] as const) {
     integration(`fresh database authority rejects stale session after ${revoked} change`, async () => {
-      const { viewer, repo, slack, service, stateInput, callback } = await fixture();
+      const { viewer, repo, slack, service, stateInput, callback, authorize } = await fixture();
+      const admitted = await authorize(slack);
       const state = await service.createOAuthState(stateInput);
       if (revoked === "tenant") await db.update(tenants).set({ active: false }).where(eq(tenants.id, viewer.tenantId));
       else if (revoked === "ambiguous") {
         const other = await fixture();
         await db.insert(tenantMemberships).values({ tenantId: other.viewer.tenantId, id: randomUUID(), auth0Subject: viewer.subject, role: "OWNER" });
       } else await db.update(tenantMemberships).set(revoked === "role" ? { role: "MEMBER" } : { active: false }).where(eq(tenantMemberships.tenantId, viewer.tenantId));
-      await assert.rejects(repo.upsertProviderConnection(db, slack));
+      await assert.rejects(repo.upsertProviderConnection(db, admitted));
       await assert.rejects(repo.revokeProviderConnection(db, { provider: "slack" }));
       await assert.rejects(service.consumeOAuthState(state, callback));
       assert.equal(await db.$count(providerConnections, eq(providerConnections.tenantId, viewer.tenantId)), 0);
@@ -127,13 +139,15 @@ if (!process.env.DATABASE_URL) {
   }
 
   integration("persisted ADMIN can manage connections without granting GitHub personal-token authority", async () => {
-    const { viewer, repository, github, slack } = await fixture();
+    const { viewer, repository, github, slack, authorize } = await fixture();
     await db.update(tenantMemberships).set({ role: "ADMIN" }).where(eq(tenantMemberships.tenantId, viewer.tenantId));
     const repo = repository({ ...viewer, role: "ADMIN" });
-    assert.equal((await repo.upsertProviderConnection(db, github)).status, "ACTIVE");
-    await assert.rejects(repo.upsertProviderConnection(db, { ...github, encryptedSecret: slack.encryptedSecret } as typeof github));
-    await assert.rejects(repo.upsertProviderConnection(db, { ...slack, encryptedSecret: token }));
-    await assert.rejects(repo.upsertProviderConnection(db, { ...slack, encryptedSecret: sealConnectionSecret(token, "cd".repeat(32)) }));
+    assert.equal((await repo.upsertProviderConnection(db, await authorize(github))).status, "ACTIVE");
+    const githubAdmission = await authorize(github);
+    await assert.rejects(repo.upsertProviderConnection(db, { ...githubAdmission, encryptedSecret: slack.encryptedSecret } as typeof githubAdmission));
+    const slackAdmission = await authorize(slack);
+    await assert.rejects(repo.upsertProviderConnection(db, { ...slackAdmission, encryptedSecret: token }));
+    await assert.rejects(repo.upsertProviderConnection(db, { ...slackAdmission, encryptedSecret: sealConnectionSecret(token, "cd".repeat(32)) }));
   });
 
   integration("database state consumption admits exactly one concurrent callback and retains its marker", async () => {
@@ -165,7 +179,8 @@ if (!process.env.DATABASE_URL) {
     integration(`${provider} revocation disables only its tenant mappings and preserves audit/replay records`, async () => {
       const a = await fixture();
       const b = await fixture();
-      await a.repo.upsertProviderConnection(db, provider === "slack" ? a.slack : a.github);
+      await a.repo.upsertProviderConnection(db, await a.authorize(provider === "slack" ? a.slack : a.github));
+      const initialStateCount = await db.$count(oauthStates, eq(oauthStates.tenantId, a.viewer.tenantId));
       await db.update(channelMappings).set({ enabled: true }).where(eq(channelMappings.tenantId, a.viewer.tenantId));
       const stateInput = { ...a.stateInput, provider };
       const callback = { ...a.callback, provider };
@@ -185,7 +200,7 @@ if (!process.env.DATABASE_URL) {
       const [other] = await db.select().from(channelMappings).where(eq(channelMappings.tenantId, b.viewer.tenantId));
       assert.equal(own.enabled, false);
       assert.equal(other.enabled, true);
-      assert.equal(await db.$count(oauthStates, eq(oauthStates.tenantId, a.viewer.tenantId)), 2);
+      assert.equal(await db.$count(oauthStates, eq(oauthStates.tenantId, a.viewer.tenantId)), initialStateCount + 2);
       assert.equal(await db.$count(audit, eq(audit.tenantId, a.viewer.tenantId)), beforeAudit + 1);
       assert.equal(await db.$count(inbox, eq(inbox.tenantId, a.viewer.tenantId)), 1);
       await assert.rejects(db.insert(inbox).values({ ...event, id: randomUUID() }));
@@ -193,16 +208,16 @@ if (!process.env.DATABASE_URL) {
       await assert.rejects(a.service.consumeOAuthState(consumed, callback));
       assert.deepEqual(await a.repo.revokeProviderConnection(db, { provider }), revoked);
       const [afterTenant] = await db.select().from(tenants).where(eq(tenants.id, a.viewer.tenantId));
-      assert.equal(afterTenant.configVersion, beforeTenant.configVersion + 1);
-      await a.repo.upsertProviderConnection(db, provider === "slack" ? a.slack : a.github);
+      assert.equal(afterTenant.configVersion, beforeTenant.configVersion + 2);
+      await a.repo.upsertProviderConnection(db, await a.authorize(provider === "slack" ? a.slack : a.github));
       const [stillDisabled] = await db.select().from(channelMappings).where(eq(channelMappings.tenantId, a.viewer.tenantId));
       assert.equal(stillDisabled.enabled, false);
     });
   }
 
   integration("audit failure rolls back revocation, mappings, config version and state invalidation", async () => {
-    const { viewer, repo, slack, service, stateInput, callback } = await fixture();
-    await repo.upsertProviderConnection(db, slack);
+    const { viewer, repo, slack, service, stateInput, callback, authorize } = await fixture();
+    await repo.upsertProviderConnection(db, await authorize(slack));
     await db.update(channelMappings).set({ enabled: true }).where(eq(channelMappings.tenantId, viewer.tenantId));
     const state = await service.createOAuthState(stateInput);
     const [beforeTenant] = await db.select().from(tenants).where(eq(tenants.id, viewer.tenantId));
@@ -215,14 +230,17 @@ if (!process.env.DATABASE_URL) {
       assert.equal(connection.status, "ACTIVE");
       assert.equal(mapping.enabled, true);
       assert.equal(tenant.configVersion, beforeTenant.configVersion);
-      assert.equal((await service.consumeOAuthState(state, callback)).tenantId, viewer.tenantId);
+      const admitted = await service.consumeOAuthState(state, callback);
+      assert.equal(admitted.tenantId, viewer.tenantId);
+      assert.equal(admitted.completion.generation, beforeTenant.configVersion);
+      assert.equal((await repo.upsertProviderConnection(db, { ...slack, completion: admitted.completion })).status, "ACTIVE");
     } finally { await db.execute(sql`alter table ${audit} drop constraint task4_force_rollback`); }
   });
 
   integration("composite membership keys reject orphan and cross-tenant connection/state records", async () => {
     const a = await fixture();
     const b = await fixture();
-    await a.repo.upsertProviderConnection(db, a.slack);
+    await a.repo.upsertProviderConnection(db, await a.authorize(a.slack));
     const [connection] = await db.select().from(providerConnections).where(eq(providerConnections.tenantId, a.viewer.tenantId));
     await assert.rejects(db.insert(providerConnections).values({ ...connection, id: randomUUID() }));
     await assert.rejects(db.insert(providerConnections).values({ ...connection, tenantId: b.viewer.tenantId }));
@@ -231,5 +249,90 @@ if (!process.env.DATABASE_URL) {
     const [state] = await db.select().from(oauthStates).where(eq(oauthStates.tenantId, a.viewer.tenantId));
     await assert.rejects(db.insert(oauthStates).values({ ...state, tenantId: b.viewer.tenantId }));
     await assert.rejects(db.insert(oauthStates).values({ ...state, provider: "unknown" as "slack", stateHash: "a".repeat(64) }));
+  });
+
+  for (const provider of ["slack", "github"] as const) {
+    integration(`${provider} consumed callback completion cannot outlive disconnect; fresh state reconnects`, async () => {
+      const { viewer, repo, service, stateInput, callback, slack, github, authorize } = await fixture();
+      const providerInput = provider === "slack" ? slack : github;
+      await repo.upsertProviderConnection(db, await authorize(providerInput));
+      await db.update(channelMappings).set({ enabled: true }).where(eq(channelMappings.tenantId, viewer.tenantId));
+      const state = await service.createOAuthState({ ...stateInput, provider });
+      const admitted = await service.consumeOAuthState(state, { ...callback, provider });
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      const completion = paused.then(() => repo.upsertProviderConnection(db, { ...providerInput, completion: admitted.completion }));
+      // Install the rejection handler before releasing the paused callback.
+      const rejected = assert.rejects(completion, /^Error: Provider connection is unavailable\.$/);
+      await repo.revokeProviderConnection(db, { provider });
+      const auditCount = await db.$count(audit, eq(audit.tenantId, viewer.tenantId));
+      const [currentTenant] = await db.select().from(tenants).where(eq(tenants.id, viewer.tenantId));
+      // Knowing the new generation cannot upgrade the old persisted envelope.
+      await assert.rejects(repo.upsertProviderConnection(db, { ...providerInput, completion: { ...admitted.completion, generation: currentTenant.configVersion } }));
+      resume();
+      await rejected;
+      const [revoked] = await db.select().from(providerConnections).where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, provider)));
+      const [mapping] = await db.select().from(channelMappings).where(eq(channelMappings.tenantId, viewer.tenantId));
+      assert.equal(revoked.status, "REVOKED");
+      assert.equal(revoked.encryptedSecret, null);
+      assert.ok(revoked.revokedAt);
+      assert.equal(mapping.enabled, false);
+      assert.equal(await db.$count(audit, eq(audit.tenantId, viewer.tenantId)), auditCount);
+
+      const fresh = await service.createOAuthState({ ...stateInput, provider });
+      const freshAdmission = await service.consumeOAuthState(fresh, { ...callback, provider });
+      assert.ok(freshAdmission.completion.generation > admitted.completion.generation);
+      assert.equal((await repo.upsertProviderConnection(db, { ...providerInput, completion: freshAdmission.completion })).status, "ACTIVE");
+      const [connected] = await db.select().from(providerConnections).where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, provider)));
+      assert.equal(connected.revokedAt, null);
+      if (provider === "slack") assert.equal(openConnectionSecret(connected.encryptedSecret!, key), token);
+      else assert.equal(connected.encryptedSecret, null);
+      assert.equal(await db.$count(audit, eq(audit.tenantId, viewer.tenantId)), auditCount + 1);
+      await assert.rejects(repo.upsertProviderConnection(db, { ...providerInput, completion: admitted.completion }));
+
+      // Even an already-REVOKED connection must cancel callbacks that were
+      // admitted since its previous disconnect, with no new ACTIVE audit row.
+      await repo.revokeProviderConnection(db, { provider });
+      const betweenDisconnects = await authorize(providerInput);
+      const beforeRepeated = await db.$count(audit, eq(audit.tenantId, viewer.tenantId));
+      await repo.revokeProviderConnection(db, { provider });
+      await assert.rejects(repo.upsertProviderConnection(db, betweenDisconnects));
+      const [stillRevoked] = await db.select().from(providerConnections).where(and(eq(providerConnections.tenantId, viewer.tenantId), eq(providerConnections.provider, provider)));
+      assert.equal(stillRevoked.status, "REVOKED");
+      assert.equal(stillRevoked.encryptedSecret, null);
+      assert.equal(await db.$count(audit, eq(audit.tenantId, viewer.tenantId)), beforeRepeated);
+      const newest = await authorize(providerInput);
+      assert.ok(newest.completion.generation > betweenDisconnects.completion.generation);
+      assert.equal((await repo.upsertProviderConnection(db, newest)).status, "ACTIVE");
+    });
+  }
+
+  integration("completion requires its original tenant, subject, provider and unexpired consumed state", async () => {
+    const a = await fixture();
+    const b = await fixture();
+    const admitted = await a.authorize(a.slack);
+    const other = await b.authorize(b.slack);
+    for (const completion of [
+      undefined, { ...admitted.completion, tenantId: b.viewer.tenantId }, { ...admitted.completion, subject: b.viewer.subject },
+      { ...admitted.completion, provider: "github" }, { ...other.completion, tenantId: a.viewer.tenantId, subject: a.viewer.subject },
+    ]) await assert.rejects(a.repo.upsertProviderConnection(db, { ...admitted, completion } as typeof admitted));
+    const adminSubject = `auth0|${randomUUID()}`;
+    await db.insert(tenantMemberships).values({ tenantId: a.viewer.tenantId, id: randomUUID(), auth0Subject: adminSubject, role: "ADMIN" });
+    const otherAdmin = a.repository({ ...a.viewer, subject: adminSubject, role: "ADMIN" });
+    await assert.rejects(otherAdmin.upsertProviderConnection(db, admitted));
+    await assert.rejects(otherAdmin.upsertProviderConnection(db, { ...admitted, completion: { ...admitted.completion, subject: adminSubject } }));
+    assert.equal(await db.$count(providerConnections, eq(providerConnections.tenantId, a.viewer.tenantId)), 0);
+    assert.equal(await db.$count(audit, eq(audit.tenantId, a.viewer.tenantId)), 0);
+    assert.equal((await a.repo.upsertProviderConnection(db, admitted)).status, "ACTIVE");
+    const expiring = await a.authorize(a.slack);
+    const [record] = await db.select().from(oauthStates).where(and(eq(oauthStates.tenantId, a.viewer.tenantId), eq(oauthStates.stateHash, expiring.completion.stateHash)));
+    const expiresAt = new Date(Date.now() - 60_000);
+    const expiredPayload = { ...JSON.parse(openConnectionSecret(record.encryptedPayload, key)), expiresAt: expiresAt.toISOString() };
+    // Keep the envelope and DB metadata consistent, so this specifically
+    // exercises the database-clock expiry gate rather than tamper rejection.
+    await db.update(oauthStates).set({ createdAt: new Date(Date.now() - 120_000), expiresAt, encryptedPayload: sealConnectionSecret(JSON.stringify(expiredPayload), key) })
+      .where(and(eq(oauthStates.tenantId, a.viewer.tenantId), eq(oauthStates.stateHash, expiring.completion.stateHash)));
+    await assert.rejects(a.repo.upsertProviderConnection(db, expiring));
+    assert.equal(await db.$count(audit, eq(audit.tenantId, a.viewer.tenantId)), 1);
   });
 }
