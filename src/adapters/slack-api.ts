@@ -395,3 +395,105 @@ export function createSlackThreadClient(options: SlackTransportOptions): { fetch
     },
   };
 }
+
+// The existing public/private channel reader, mentions and review cards need
+// these bot permissions. No user, DM, admin, join or public-posting authority.
+export const SLACK_CONNECTION_SCOPES: readonly string[] = Object.freeze([
+  "app_mentions:read", "channels:history", "channels:read", "chat:write", "groups:history", "groups:read",
+]);
+export interface SlackOAuthOptions {
+  clientId: string;
+  appId: string;
+  redirectUri: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+export interface SlackOAuthCodeInput {
+  code: string;
+  pkceVerifier: string;
+  expectedTeamId?: string;
+  expectedBotUserId?: string;
+}
+/** Internal server transport result. Only the connection service may seal the
+ * token and project safe metadata; never serialize this object. */
+export interface VerifiedSlackOAuth {
+  teamId: string;
+  botUserId: string;
+  displayName: string;
+  scopes: string[];
+  botToken: string;
+}
+
+const TEAM_ID = /^T[A-Z0-9]{1,63}$/;
+const USER_ID = /^[UW][A-Z0-9]{1,63}$/;
+
+function workspaceName(value: unknown): value is string {
+  return typeof value === "string" && value.isWellFormed() && value === value.trim() && value.length > 0 && value.length <= 120
+    && !/[<>]/.test(value) && ![...value].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
+}
+
+/** PKCE-only web OAuth: Slack documents omitting client_secret for this flow.
+ * No endpoint override and no retry of the single-use code exchange. */
+export async function exchangeSlackOAuthCode(options: SlackOAuthOptions, input: SlackOAuthCodeInput): Promise<VerifiedSlackOAuth> {
+  try {
+    // Lazy boundary preserves the existing adapter's standalone Node consumers,
+    // while preventing this credential-bearing path from entering client code.
+    await import("server-only");
+    if (typeof window !== "undefined") throw new Error();
+    const redirectUri = new URL(options.redirectUri);
+    if (!matches(options.clientId, /^\d{1,32}\.\d{1,32}$/) || !matches(options.appId, /^A[A-Z0-9]{1,63}$/)
+      || redirectUri.protocol !== "https:" || redirectUri.username || redirectUri.password || redirectUri.search || redirectUri.hash
+      || redirectUri.pathname !== "/api/settings/connections/slack/callback"
+      || ["localhost", "127.0.0.1", "[::1]"].includes(redirectUri.hostname)
+      || !matches(input.code, /^[A-Za-z0-9._~-]{1,2048}$/) || !matches(input.pkceVerifier, /^[A-Za-z0-9._~-]{43,128}$/)
+      || (input.expectedTeamId !== undefined && !matches(input.expectedTeamId, TEAM_ID))
+      || (input.expectedBotUserId !== undefined && !matches(input.expectedBotUserId, USER_ID))) throw new Error();
+    const timeoutMs = options.timeoutMs ?? 10_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) throw new Error();
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    return await bounded(timeoutMs, options.signal, async (budget) => {
+      async function call(method: "oauth.v2.access" | "auth.test", body: URLSearchParams, botToken?: string) {
+        active(budget);
+        const response = await fetchImpl(`https://slack.com/api/${method}`, {
+          method: "POST", body: body.toString(), redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
+          credentials: "omit", signal: budget.signal,
+          headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded", ...(botToken ? { authorization: `Bearer ${botToken}` } : {}) },
+        });
+        if (budget.signal.aborted || !response.ok || response.redirected) { discard(response); throw new Error(); }
+        active(budget);
+        const payload = await readJson(response, budget);
+        if (payload.ok !== true) throw new Error();
+        return payload;
+      }
+      const payload = await call("oauth.v2.access", new URLSearchParams({
+        client_id: options.clientId, code: input.code, code_verifier: input.pkceVerifier,
+        redirect_uri: options.redirectUri, grant_type: "authorization_code",
+      }));
+      if (payload.token_type !== "bot" || !matches(payload.access_token, /^xoxb-[A-Za-z0-9-]{1,4096}$/)
+        || payload.app_id !== options.appId || !matches(payload.bot_user_id, USER_ID)
+        || !record(payload.team) || !matches(payload.team.id, TEAM_ID) || !workspaceName(payload.team.name)
+        || payload.team.name.includes(payload.access_token)
+        || (input.expectedTeamId !== undefined && payload.team.id !== input.expectedTeamId)
+        || (input.expectedBotUserId !== undefined && payload.bot_user_id !== input.expectedBotUserId)
+        || (payload.is_enterprise_install !== undefined && payload.is_enterprise_install !== false)
+        || payload.refresh_token !== undefined || payload.expires_in !== undefined || payload.incoming_webhook !== undefined
+        || !record(payload.authed_user) || !matches(payload.authed_user.id, USER_ID)
+        || payload.authed_user.access_token !== undefined || payload.authed_user.refresh_token !== undefined
+        || payload.authed_user.token_type !== undefined || (payload.authed_user.scope !== undefined && payload.authed_user.scope !== "")
+        || typeof payload.scope !== "string" || payload.scope.length > 2048) throw new Error();
+      const scopes = payload.scope.split(",").map((scope) => scope.trim()).sort();
+      if (scopes.length !== SLACK_CONNECTION_SCOPES.length || scopes.some((scope, index) => scope !== SLACK_CONNECTION_SCOPES[index])) throw new Error();
+      const enterpriseId = payload.enterprise == null ? undefined : record(payload.enterprise) ? payload.enterprise.id : null;
+      if (enterpriseId !== undefined && !matches(enterpriseId, /^E[A-Z0-9]{1,63}$/)) throw new Error();
+      const identity = await call("auth.test", new URLSearchParams(), payload.access_token);
+      if (identity.team_id !== payload.team.id || identity.user_id !== payload.bot_user_id || !matches(identity.bot_id, /^B[A-Z0-9]{1,63}$/)
+        || (identity.enterprise_id ?? undefined) !== enterpriseId
+        || (identity.is_enterprise_install !== undefined && identity.is_enterprise_install !== false)) throw new Error();
+      return { teamId: payload.team.id, botUserId: payload.bot_user_id, displayName: payload.team.name, scopes, botToken: payload.access_token };
+    });
+  } catch {
+    // Never attach the response, request body, token, provider code or cause.
+    throw failure("slack_auth_error");
+  }
+}

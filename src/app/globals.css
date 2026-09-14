@@ -65,6 +65,230 @@ a {
   border: 0;
 }
 
+.connection-settings-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.connection-settings-nav,
+.connection-toolbar,
+.connection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.connection-settings-nav,
+.connection-toolbar {
+  justify-content: space-between;
+}
+
+.connection-settings-nav {
+  color: var(--teal-dark);
+  font-size: 14px;
+}
+
+.connection-settings-heading {
+  margin: 44px 0 24px;
+}
+
+.connection-settings-heading h1 {
+  margin: 8px 0;
+  font-size: 34px;
+  letter-spacing: -0.04em;
+}
+
+.connection-settings-heading > p:last-child,
+.connection-notice,
+.connection-toolbar,
+.connection-metadata {
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.settings-connections .settings-callout strong {
+  font-size: 14px;
+}
+
+.settings-connections .settings-callout p {
+  color: #466c67;
+  font-size: 13px;
+}
+
+.connection-toolbar {
+  margin-top: 24px;
+}
+
+.connection-settings-page .connector-grid {
+  align-items: start;
+}
+
+.connection-card {
+  min-width: 0;
+}
+
+.connection-card .connector-card-header {
+  flex-wrap: wrap;
+}
+
+.connection-card h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 19px;
+}
+
+.connection-state {
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.connection-state-saved {
+  color: var(--teal-dark);
+  background: var(--teal-wash);
+}
+
+.connection-state-disconnected {
+  color: #6c482e;
+  background: var(--orange-wash);
+}
+
+.connection-card > .connection-display-name {
+  min-height: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.connection-metadata {
+  display: grid;
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.connection-metadata dt {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.connection-metadata dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.connection-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.connection-scopes code {
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--canvas);
+  font-size: 12px;
+}
+
+.connection-card > .connection-guidance,
+.connection-setup-unavailable {
+  min-height: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.connection-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--teal-dark);
+  background: var(--paper);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.connection-button:hover {
+  background: var(--teal-wash);
+}
+
+.connection-button-danger {
+  color: #963a28;
+}
+
+.connection-button:disabled {
+  color: #67747a;
+  background: var(--canvas);
+  cursor: not-allowed;
+}
+
+.connection-settings-page :is(a, button, input):focus-visible {
+  outline: 3px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.connection-confirmation,
+.connection-error {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #d9ae9c;
+  border-radius: 8px;
+  color: #713923;
+  background: #fff9f5;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.connection-confirmation fieldset {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.connection-confirmation legend {
+  font-weight: 700;
+}
+
+.connection-confirmation label {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.connection-confirmation input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: var(--teal);
+}
+
+.connection-error a {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .connection-settings-page {
+    padding: 24px 18px;
+  }
+
+  .connection-settings-heading {
+    margin-top: 32px;
+  }
+}
+
 .dashboard-shell {
   display: flex;
   min-height: 100vh;

@@ -62,8 +62,9 @@ export function getConnectorStatuses(env: ConnectorEnvironment): ConnectorSummar
       id: "neon",
       name: "Neon",
       category: "Data" as const,
+      // Preserve the operator's legacy pilot setup check, not dashboard authority.
       required: ["DATABASE_URL", "SIGNAL_DASHBOARD_TENANT_ID"],
-      detail: "Set an active pilot tenant on the server and import its allowed channel/repository mappings. A successful dashboard refresh verifies only that database read.",
+      detail: "Legacy operator pilot setup only: import the allowed channel/repository mappings. Authenticated monitoring uses server-resolved membership and does not require this legacy tenant selector. A successful dashboard refresh verifies only that database read.",
     },
     {
       id: "slack",
@@ -83,8 +84,9 @@ export function getConnectorStatuses(env: ConnectorEnvironment): ConnectorSummar
       id: "auth0",
       name: "Auth0",
       category: "Access" as const,
+      // Legacy inspector setup presence only; this is not session readiness.
       required: ["AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "AUTH0_SECRET"],
-      detail: "The optional authenticated inspector is disabled in this MVP. Private monitoring stays unavailable until a verified server session maps the viewer to the pilot. Credentials or a server-configured tenant alone do not grant viewer access or authorize GitHub writes.",
+      detail: "These legacy inspector configuration checks do not verify authentication. Auth0 sign-in requires AUTH0_BASE_URL, AUTH0_ISSUER_BASE_URL, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET and AUTH0_SECRET on the server, plus an active tenant membership for monitoring. Signing in does not connect Slack or GitHub providers or authorize GitHub writes. The optional proposal inspector is disabled.",
     },
     {
       id: "trigger",

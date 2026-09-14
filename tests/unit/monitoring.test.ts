@@ -1,15 +1,25 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { registerHooks } from "node:module";
+import test, { after } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime.js";
 import { MonitoringDashboard } from "../../src/components/monitoring-dashboard.tsx";
 import { getConnectorStatuses } from "../../src/lib/dashboard-settings.ts";
-import { loadMonitoringDashboardData } from "../../src/lib/monitoring-data.ts";
 import {
   filterConversations, getMonitoringMetrics, mapPersistedConversation, mapObservedConversation,
   type MonitoringDashboardData,
 } from "../../src/lib/monitoring.ts";
+
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "server-only"
+      ? { url: "data:text/javascript,export {};", shortCircuit: true }
+      : nextResolve(specifier, context);
+  },
+});
+after(() => hooks.deregister());
+const { loadMonitoringDashboardData } = await import("../../src/lib/monitoring-data.ts");
 
 type ConversationRow = Parameters<typeof mapPersistedConversation>[0];
 type ObserverRow = Parameters<typeof mapObservedConversation>[0];
@@ -174,8 +184,8 @@ test("observer evidence links use valid persisted coordinates only", () => {
   assert.equal(mapObservedConversation({ ...observerRow, source: "slack", channelId: "C123", messageTs: "1710000000.000001" }).evidence[0]?.href, "https://slack.com/archives/C123/p1710000000000001");
 });
 
-test("missing server tenant or database fails closed without reading any records", async () => {
-  for (const env of [{ database: "synthetic-url" }, { tenant: "   ", database: "synthetic-url" }, { tenant: "tenant-fixture" }, { tenant: "tenant-fixture", database: "   " }]) {
+test("missing database fails closed even for an authenticated member", async () => {
+  for (const env of [{}, { tenant: "tenant-fixture" }, { tenant: "tenant-fixture", database: "   " }]) {
     await withServerEnvironment(env, async () => {
       const fixture = fakeDependencies({ createDb: () => { assert.fail("database must not be created"); } });
       const data = await loadMonitoringDashboardData(fixture.dependencies);
@@ -186,7 +196,7 @@ test("missing server tenant or database fails closed without reading any records
   }
 });
 
-test("missing/inactive pilots and pilots without enabled mappings expose no monitoring data", async () => {
+test("missing/inactive tenants and tenants without enabled mappings expose no monitoring data", async () => {
   await withServerEnvironment({ tenant: "tenant-fixture", database: "synthetic-url" }, async () => {
     for (const mappings of [null, []]) {
       const fixture = fakeDependencies({ loadConfiguredPilot: async () => mappings, listMonitoringConversations: async () => { assert.fail("inactive or unmapped pilot must not load records"); }, listObservedConversations: async () => { assert.fail("inactive or unmapped pilot must not load observations"); } });
@@ -198,8 +208,8 @@ test("missing/inactive pilots and pilots without enabled mappings expose no moni
   });
 });
 
-test("loader uses only the trimmed server tenant and orders records without disclosing identity", async () => {
-  await withServerEnvironment({ tenant: "  tenant-fixture  ", database: "synthetic-url" }, async () => {
+test("loader uses only the resolved membership tenant and orders records without disclosing identity", async () => {
+  await withServerEnvironment({ tenant: "  other-tenant  ", database: "synthetic-url" }, async () => {
     const fixture = fakeDependencies();
     const data = await loadMonitoringDashboardData(fixture.dependencies);
     assert.deepEqual(fixture.calls, ["pilot:tenant-fixture", "threads:tenant-fixture", "observers:tenant-fixture"]);
@@ -214,12 +224,18 @@ test("loader uses only the trimmed server tenant and orders records without disc
 
 test("cross-tenant data aborts the entire snapshot instead of leaking records", async () => {
   await withServerEnvironment({ tenant: "tenant-fixture", database: "synthetic-url" }, async () => {
-    const fixture = fakeDependencies({ listObservedConversations: async () => [{ ...observerRow, tenantId: "other-tenant" }] });
-    const data = await loadMonitoringDashboardData(fixture.dependencies);
-    assert.equal(data.mode, "UNAVAILABLE");
-    assert.deepEqual(data.conversations, []);
-    assert.equal(JSON.stringify(data).includes("other-tenant"), false);
-    assert.equal(fixture.closed(), 1);
+    for (const overrides of [
+      { listObservedConversations: async () => [{ ...observerRow, tenantId: "other-tenant" }] },
+      { listMonitoringConversations: async () => [{ ...conversationRow, tenantId: "other-tenant" }] },
+    ]) {
+      const fixture = fakeDependencies(overrides);
+      const data = await loadMonitoringDashboardData(fixture.dependencies);
+      assert.equal(data.mode, "UNAVAILABLE");
+      assert.deepEqual(data.conversations, []);
+      assert.doesNotMatch(JSON.stringify(data), /other-tenant|tenant-fixture|Persist the fixture/);
+      assert.doesNotMatch(renderDashboard(data), /other-tenant|tenant-fixture|Persist the fixture/);
+      assert.equal(fixture.closed(), 1);
+    }
   });
 });
 
@@ -266,6 +282,37 @@ test("unavailable UI does not render fake identity, active feeds, zero success m
   assert.match(html, /aria-label="Setup help"/);
   assert.match(html, /aria-label="Open settings"/);
   assert.doesNotMatch(html, /Neon connected|>Rob<|Luna 5\.6|Ask squad|Open profile|>Live data</);
+  assert.doesNotMatch(html, /class="nav-count|>0 showing<|>0 in this snapshot<|>0 events</);
+});
+
+test("unavailable UI discards stale records, counts and snapshot time after access denial", () => {
+  const html = renderDashboard({
+    mode: "UNAVAILABLE", notice: "Private monitoring is unavailable.", loadedAt: "2030-01-01T00:00:00.000Z",
+    conversations: [mapPersistedConversation(conversationRow), mapObservedConversation(observerRow)],
+    connectors: getConnectorStatuses({}),
+  });
+  assert.doesNotMatch(html, /Persist the fixture|synthetic-body-not-for-browser|tenant-fixture|2030-01-01|class="nav-count/);
+  assert.match(html, /Sources represented<\/span><strong>—<\/strong>/);
+  assert.match(html, /No current snapshot/);
+});
+
+test("legacy operator setup readiness grants neither dashboard membership nor provider access", async () => {
+  const connectors = getConnectorStatuses({ DATABASE_URL: "synthetic-url", SIGNAL_DASHBOARD_TENANT_ID: "legacy-tenant" });
+  const neon = connectors.find(({ id }) => id === "neon")!;
+  const auth = connectors.find(({ id }) => id === "auth0")!;
+  assert.equal(neon.status, "ready");
+  assert.match(neon.detail, /legacy.*operator.*pilot/i);
+  assert.match(auth.detail, /active tenant membership/i);
+  assert.match(auth.detail, /signing in does not connect.*providers/i);
+  assert.doesNotMatch(JSON.stringify(connectors), /synthetic-url|legacy-tenant/);
+
+  await withServerEnvironment({ tenant: "legacy-tenant", database: "synthetic-url" }, async () => {
+    const fixture = fakeDependencies({ resolveViewer: async () => null, createDb: () => { assert.fail("configuration cannot grant membership"); } });
+    const data = await loadMonitoringDashboardData(fixture.dependencies);
+    assert.equal(data.mode, "UNAVAILABLE");
+    assert.deepEqual(fixture.calls, []);
+    assert.deepEqual(data.conversations, []);
+  });
 });
 
 test("rendered records show exact states and keep dashboard approval unavailable", () => {

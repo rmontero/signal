@@ -1,13 +1,61 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
 
 const id = () => text("id").notNull();
 const createdAt = () => timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull();
 
 export const tenants = pgTable("tenants", {
-  id: id(), slackTeamId: text("slack_team_id").notNull(), active: boolean("active").default(true).notNull(),
+  id: id(), slackTeamId: text("slack_team_id"), displayName: text("display_name").default("My workspace").notNull(), active: boolean("active").default(true).notNull(),
   configVersion: integer("config_version").default(1).notNull(), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.id] }), unique("tenants_slack_team_unique").on(table.slackTeamId)]);
+
+export const tenantMemberships = pgTable("tenant_memberships", {
+  tenantId: text("tenant_id").notNull(), id: id(), auth0Subject: text("auth0_subject").notNull(),
+  role: text("role").$type<"OWNER" | "ADMIN" | "MEMBER">().notNull(), active: boolean("active").default(true).notNull(), createdAt: createdAt(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.id] }),
+  unique("tenant_memberships_subject_unique").on(table.tenantId, table.auth0Subject),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "tenant_memberships_tenant_fk" }),
+  check("tenant_memberships_role_check", sql`${table.role} in ('OWNER','ADMIN','MEMBER')`),
+  check("tenant_memberships_subject_check", sql`${table.auth0Subject} collate "C" ~ '^[!-~]{1,255}$'`),
+  index("tenant_memberships_subject_lookup").on(table.auth0Subject),
+]);
+
+export const providerConnections = pgTable("provider_connections", {
+  tenantId: text("tenant_id").notNull(), id: id(), provider: text("provider").$type<"github" | "slack">().notNull(),
+  externalAccountId: text("external_account_id").notNull(), installationId: text("installation_id"), botUserId: text("bot_user_id"),
+  displayName: text("display_name").notNull(), encryptedSecret: text("encrypted_secret"), scopes: jsonb("scopes").$type<string[]>().notNull(),
+  status: text("status").$type<"ACTIVE" | "REVOKED">().default("ACTIVE").notNull(), connectedBySubject: text("connected_by_subject").notNull(),
+  createdAt: createdAt(), updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "date" }),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.id] }),
+  unique("provider_connections_provider_unique").on(table.tenantId, table.provider),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "provider_connections_tenant_fk" }),
+  foreignKey({ columns: [table.tenantId, table.connectedBySubject], foreignColumns: [tenantMemberships.tenantId, tenantMemberships.auth0Subject], name: "provider_connections_membership_fk" }),
+  check("provider_connections_provider_check", sql`${table.provider} in ('github','slack')`),
+  check("provider_connections_status_check", sql`${table.status} in ('ACTIVE','REVOKED')`),
+  check("provider_connections_account_check", sql`${table.externalAccountId} collate "C" ~ '^[!-~]{1,255}$'`),
+  check("provider_connections_scopes_check", sql`jsonb_typeof(${table.scopes}) = 'array'`),
+  check("provider_connections_identity_check", sql`(${table.provider} = 'github' and ${table.installationId} is not null and ${table.installationId} collate "C" ~ '^[!-~]{1,255}$' and ${table.botUserId} is null and ${table.encryptedSecret} is null) or (${table.provider} = 'slack' and ${table.installationId} is null and ${table.botUserId} is not null and ${table.botUserId} collate "C" ~ '^[!-~]{1,255}$' and (${table.status} = 'REVOKED' or ${table.encryptedSecret} is not null))`),
+  check("provider_connections_revoked_check", sql`(${table.status} = 'ACTIVE' and ${table.revokedAt} is null) or (${table.status} = 'REVOKED' and ${table.revokedAt} is not null and ${table.encryptedSecret} is null)`),
+]);
+
+export const oauthStates = pgTable("oauth_states", {
+  tenantId: text("tenant_id").notNull(), stateHash: text("state_hash").notNull(), subject: text("auth0_subject").notNull(),
+  provider: text("provider").$type<"github" | "slack">().notNull(), returnTo: text("return_to").notNull(),
+  encryptedPayload: text("encrypted_payload").notNull(), expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true, mode: "date" }), createdAt: createdAt(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantId, table.stateHash] }),
+  foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "oauth_states_tenant_fk" }),
+  foreignKey({ columns: [table.tenantId, table.subject], foreignColumns: [tenantMemberships.tenantId, tenantMemberships.auth0Subject], name: "oauth_states_membership_fk" }),
+  check("oauth_states_provider_check", sql`${table.provider} in ('github','slack')`),
+  check("oauth_states_hash_check", sql`${table.stateHash} ~ '^[a-f0-9]{64}$'`),
+  check("oauth_states_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+  check("oauth_states_return_to_check", sql`length(${table.returnTo}) between 1 and 2048 and left(${table.returnTo}, 1) = '/' and left(${table.returnTo}, 2) <> '//'`),
+  index("oauth_states_expiry_lookup").on(table.tenantId, table.expiresAt),
+]);
 
 export const channelMappings = pgTable("channel_mappings", {
   tenantId: text("tenant_id").notNull(), channelId: text("channel_id").notNull(), repositoryId: text("repository_id").notNull(),
@@ -114,4 +162,4 @@ export const audit = pgTable("audit", {
   tenantId: text("tenant_id").notNull(), id: id(), actorSlackId: text("actor_slack_id"), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), fromState: text("from_state"), toState: text("to_state"), payloadHash: text("payload_hash"), createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.tenantId, table.id] }), foreignKey({ columns: [table.tenantId], foreignColumns: [tenants.id], name: "audit_tenant_fk" })]);
 
-export const schema = { tenants, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, slackReviews, observedEvents, outbox, audit };
+export const schema = { tenants, tenantMemberships, providerConnections, oauthStates, channelMappings, approvers, identityMappings, threads, inbox, snapshots, proposals, operations, approvals, slackReviews, observedEvents, outbox, audit };

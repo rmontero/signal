@@ -22,7 +22,7 @@
 - Preserve the existing uncommitted expiry fix in `src/db/approval-persistence.ts`; do not edit `tasks.md` from feature workers.
 - Do not commit, push, deploy, or contact Auth0/GitHub/Slack during implementation without explicit action-time authorization.
 
-### Task 1: Add Auth0 server client and tenant resolver
+### Task 1: Add Auth0 server client and tenant resolver ✅
 
 **Files:**
 - Create: `src/lib/auth0.ts`
@@ -47,7 +47,7 @@
 - [ ] **Step 4: Implement `resolveViewerTenant()`** so session subject is trimmed/validated, membership is loaded server-side, inactive memberships return null, and no tenant ID comes from browser input.
 - [ ] **Step 5: Re-run focused tests** and verify all authentication/tenant-boundary cases pass without exposing session errors.
 
-### Task 2: Add tenant memberships and first-signup onboarding
+### Task 2: Add tenant memberships and first-signup onboarding ✅
 
 **Files:**
 - Modify: `src/db/schema.ts`
@@ -71,7 +71,7 @@
 - [ ] **Step 5: Add onboarding page/action** that requires a verified session and creates only the current subject’s tenant.
 - [ ] **Step 6: Generate/check the migration and run isolated migration/integration tests** without applying it to shared application data.
 
-### Task 3: Replace dashboard env authority with Auth0 membership
+### Task 3: Replace dashboard env authority with Auth0 membership ✅
 
 **Files:**
 - Modify: `src/lib/monitoring-data.ts`
@@ -90,7 +90,7 @@
 - [ ] **Step 3: Preserve the public setup shell** for anonymous users and ensure the Settings copy distinguishes authentication from provider configuration.
 - [ ] **Step 4: Run the monitoring test suite** and verify no private text is rendered on denial paths.
 
-### Task 4: Add encrypted provider connection persistence and OAuth state
+### Task 4: Add encrypted provider connection persistence and OAuth state ✅
 
 **Files:**
 - Modify: `src/db/schema.ts`
@@ -134,7 +134,7 @@
 - [ ] **Step 4: Persist the tenant connection and offer explicit repository/channel mapping next steps** without silently selecting a repository.
 - [ ] **Step 5: Run focused tests and verify no private installation token or GitHub response is serialized.**
 
-### Task 6: Implement Slack OAuth connection
+### Task 6: Implement Slack OAuth connection ✅
 
 **Files:**
 - Create: `src/app/api/settings/connections/slack/start/route.ts`

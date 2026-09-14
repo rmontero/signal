@@ -1,5 +1,6 @@
 import "server-only";
 import { createDb, type SignalDb } from "../db/client";
+import { findMembershipBySubject } from "../db/membership-repository";
 import { auth0, normalizeAuth0Subject } from "./auth0";
 
 export type ViewerTenant = { subject: string; tenantId: string; role: "OWNER" | "ADMIN" | "MEMBER" };
@@ -46,9 +47,8 @@ export function createViewerTenantResolver(dependencies: ViewerTenantDependencie
   };
 }
 
-// Task 2 supplies findMembershipBySubject(db, subject). Until it exists, deny
-// every viewer without connecting to persistence or falling back to a pilot ID.
 export const resolveViewerTenant = createViewerTenantResolver({
   getSession: () => auth0.getSession(),
   createDb,
+  findMembershipBySubject,
 });
