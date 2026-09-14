@@ -90,7 +90,7 @@
 - [ ] **Step 3: Preserve the public setup shell** for anonymous users and ensure the Settings copy distinguishes authentication from provider configuration.
 - [ ] **Step 4: Run the monitoring test suite** and verify no private text is rendered on denial paths.
 
-### Task 4: Add encrypted provider connection persistence and OAuth state
+### Task 4: Add encrypted provider connection persistence and OAuth state ✅
 
 **Files:**
 - Modify: `src/db/schema.ts`
@@ -134,7 +134,7 @@
 - [ ] **Step 4: Persist the tenant connection and offer explicit repository/channel mapping next steps** without silently selecting a repository.
 - [ ] **Step 5: Run focused tests and verify no private installation token or GitHub response is serialized.**
 
-### Task 6: Implement Slack OAuth connection
+### Task 6: Implement Slack OAuth connection ✅
 
 **Files:**
 - Create: `src/app/api/settings/connections/slack/start/route.ts`
