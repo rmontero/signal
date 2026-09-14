@@ -71,6 +71,13 @@
       "when": 1789342889779,
       "tag": "0009_auth0_memberships",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789345100009,
+      "tag": "0010_provider_connections",
+      "breakpoints": true
     }
   ]
 }

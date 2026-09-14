@@ -47,7 +47,7 @@
 - [ ] **Step 4: Implement `resolveViewerTenant()`** so session subject is trimmed/validated, membership is loaded server-side, inactive memberships return null, and no tenant ID comes from browser input.
 - [ ] **Step 5: Re-run focused tests** and verify all authentication/tenant-boundary cases pass without exposing session errors.
 
-### Task 2: Add tenant memberships and first-signup onboarding
+### Task 2: Add tenant memberships and first-signup onboarding ✅
 
 **Files:**
 - Modify: `src/db/schema.ts`
@@ -71,7 +71,7 @@
 - [ ] **Step 5: Add onboarding page/action** that requires a verified session and creates only the current subject’s tenant.
 - [ ] **Step 6: Generate/check the migration and run isolated migration/integration tests** without applying it to shared application data.
 
-### Task 3: Replace dashboard env authority with Auth0 membership
+### Task 3: Replace dashboard env authority with Auth0 membership ✅
 
 **Files:**
 - Modify: `src/lib/monitoring-data.ts`
